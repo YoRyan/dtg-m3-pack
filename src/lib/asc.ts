@@ -21,7 +21,7 @@ export enum AscBrake {
     Emergency,
 }
 
-type AscAccum = AscMode.Normal | OverspeedEvent | AscMode.Emergency;
+type AscAccum = AscMode.Normal | [event: OverspeedEvent, acknowledged: boolean] | AscMode.Emergency;
 type OverspeedEvent = { initSpeedMps: number };
 enum AscMode {
     Normal,
@@ -32,8 +32,10 @@ enum AscMode {
  * Create a new ASC instance.
  * @param e The player's engine.
  * @param cabAspect A stream that indicates the current cab signal aspect.
- * @param acknowledge A behavior that indicates the state of the safety systems
- * reset control.
+ * @param acknowledge A behavior that indicates the state of the acknowledge
+ * joystick.
+ * @param coastOrBrake A behavior that indicates the master controller has been
+ * placed into a braking or the coast position.
  * @param cutIn An event stream that indicates the state of the cut in control.
  * @returns An event stream that commmunicates all state for this system.
  */
@@ -41,6 +43,7 @@ export function create(
     e: FrpEngine,
     cabAspect: frp.Behavior<cs.LirrAspect>,
     acknowledge: frp.Behavior<boolean>,
+    coastOrBrake: frp.Behavior<boolean>,
     cutIn: frp.Stream<boolean>
 ): frp.Stream<AscState> {
     const cutInOut$ = frp.compose(
@@ -70,7 +73,7 @@ export function create(
             frp.map(_ => frp.snapshot(isOverspeed)),
             fsm(false),
             frp.filter(([from, to]) => !from && to),
-            frp.map(_ => {
+            frp.map((_): OverspeedEvent => {
                 return { initSpeedMps: frp.snapshot(aSpeedMps) };
             })
         );
@@ -79,21 +82,27 @@ export function create(
         frp.merge<OverspeedEvent, number>(overspeed$),
         foldWithResetBehavior<AscAccum, number | OverspeedEvent>(
             (accum, value) => {
-                if (accum === AscMode.Normal && typeof value !== "number") {
+                if (accum === AscMode.Normal && typeof value === "number") {
+                    // Do nothing.
+                    return AscMode.Normal;
+                } else if (accum == AscMode.Normal) {
                     // Enter the penalty state.
-                    return value;
+                    return [value as OverspeedEvent, false];
                 } else if (accum === AscMode.Emergency) {
                     // Emergency braking; stay until the train has stopped.
                     const ack = frp.snapshot(acknowledge),
                         stopped = frp.snapshot(aSpeedMps) < c.stopSpeed;
                     return ack && stopped ? AscMode.Normal : AscMode.Emergency;
+                } else if (!accum[1]) {
+                    // Penalty braking, not acknowledged; we need to wait for
+                    // acknowledgement from the engineer.
+                    return [accum[0], frp.snapshot(acknowledge)];
                 } else {
-                    // Penalty braking; stay until the engineer has acknowledged
-                    // and is under-speed.
-                    const ack = frp.snapshot(acknowledge),
-                        aspect = frp.snapshot(cabAspect),
-                        underSpeed = frp.snapshot(aSpeedMps) < toUnderspeedSetpointMps(aspect);
-                    return ack && underSpeed ? AscMode.Normal : accum;
+                    // Penalty braking, acknowledged; brake until the train is
+                    // under-speed and the master controller is in a braking or
+                    // coast position.
+                    const underSpeed = frp.snapshot(aSpeedMps) < toUnderspeedSetpointMps(frp.snapshot(cabAspect));
+                    return underSpeed && frp.snapshot(coastOrBrake) ? AscMode.Normal : accum;
                 }
             },
             AscMode.Normal,

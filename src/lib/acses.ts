@@ -19,7 +19,7 @@ export enum AcsesBrake {
 
 type AcsesAccum = {
     advanceLimits: Map<number, AdvanceLimitHazard>;
-    mode: AcsesMode.Normal | AlertEvent | AcsesMode.Penalty;
+    mode: AcsesMode.Normal | AlertEvent | AcsesMode.Penalty | AcsesMode.PenaltyAcknowledged;
     positiveStop: boolean;
     overspeed: boolean;
     trackSpeedMps: number | undefined;
@@ -28,6 +28,7 @@ type AlertEvent = { startClockS: number };
 enum AcsesMode {
     Normal,
     Penalty,
+    PenaltyAcknowledged,
 }
 /**
  * Distance traveled since the last search along with a collection of
@@ -52,14 +53,17 @@ const alertMarginMps = 3 * c.mph.toMps,
 /**
  * Create a new ACSES instance.
  * @param e The player's engine.
- * @param acknowledge A behavior that indicates the state of the safety systems
- * reset control.
+ * @param acknowledge A behavior that indicates the state of the acknowledge
+ * joystick.
+ * @param coastOrBrake A behavior that indicates the master controller has been
+ * placed into a braking or the coast position.
  * @param cutIn An event stream that indicates the state of the cut in control.
  * @returns A collection of useful event streams.
  */
 export function create(
     e: FrpEngine,
     acknowledge: frp.Behavior<boolean>,
+    coastOrBrake: frp.Behavior<boolean>,
     cutIn: frp.Stream<boolean>
 ): frp.Stream<AcsesState> {
     const cutInOut$ = frp.compose(
@@ -143,10 +147,17 @@ export function create(
                     isPositiveStop = inForce instanceof StopSignalHazard,
                     isOverspeed = aSpeedMps > inForce.alertCurveMps;
                 let mode;
-                if (accum.mode === AcsesMode.Penalty && isPositiveStop && inForce.penaltyCurveMps < 1) {
-                    mode = AcsesMode.Penalty;
-                } else if (accum.mode === AcsesMode.Penalty) {
-                    mode = !isOverspeed && frp.snapshot(acknowledge) ? AcsesMode.Normal : AcsesMode.Penalty;
+                if (accum.mode === AcsesMode.Penalty) {
+                    mode = frp.snapshot(acknowledge) ? AcsesMode.PenaltyAcknowledged : AcsesMode.Penalty;
+                } else if (
+                    accum.mode === AcsesMode.PenaltyAcknowledged &&
+                    isPositiveStop &&
+                    inForce.penaltyCurveMps < 1
+                ) {
+                    mode = AcsesMode.PenaltyAcknowledged;
+                } else if (accum.mode === AcsesMode.PenaltyAcknowledged) {
+                    mode =
+                        !isOverspeed && frp.snapshot(coastOrBrake) ? AcsesMode.Normal : AcsesMode.PenaltyAcknowledged;
                 } else if (accum.mode === AcsesMode.Normal) {
                     mode = isOverspeed ? { startClockS: t } : AcsesMode.Normal;
                 } else if (aSpeedMps > inForce.penaltyCurveMps) {
