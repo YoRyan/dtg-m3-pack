@@ -34,6 +34,11 @@ enum BrakeType {
 }
 
 const me = new FrpEngine(() => {
+    // Read starting configuration and destination boards from the rail vehicle
+    // number.
+    const [, , rvStart, rvDest] = string.find(me.rv.GetRVNumber(), "^([CR])([a-z])"),
+        startColdAndDark = rvStart === "C";
+
     function forPlayerEngine<T>(): (eventStream: frp.Stream<T>) => frp.Stream<T> {
         return frp.filter((_: T) => me.eng.GetIsEngineWithKey());
     }
@@ -51,7 +56,9 @@ const me = new FrpEngine(() => {
         ),
         masterController = frp.stepper(
             masterController$,
-            readMasterController(me.rv.GetControlValue("ThrottleAndBrake", 0) as number)
+            startColdAndDark
+                ? ControllerRegion.EmergencyBrake
+                : readMasterController(me.rv.GetControlValue("ThrottleAndBrake", 0) as number)
         ),
         acknowledge = () => (me.rv.GetControlValue("AWSReset", 0) as number) > 0.5,
         coastOrBrake = () => {
