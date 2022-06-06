@@ -1,6 +1,7 @@
 /** @noSelfInFile */
 
 import * as acses from "../../../../../../../../lib/acses";
+import * as ale from "../../../../../../../../lib/alerter";
 import * as asc from "../../../../../../../../lib/asc";
 import * as cs from "../../../../../../../../lib/cabsignals";
 import * as c from "../../../../../../../../lib/constants";
@@ -37,20 +38,23 @@ const me = new FrpEngine(() => {
         return frp.filter((_: T) => me.eng.GetIsEngineWithKey());
     }
 
-    const masterController = (): MasterController => {
-        const cv = me.rv.GetControlValue("ThrottleAndBrake", 0) as number;
-        if (cv < -0.9 - 0.05) {
-            return ControllerRegion.EmergencyBrake;
-        } else if (cv < -0.2 + 0.05) {
-            // scaled from 0 (min braking) to 1 (max service braking)
-            return [ControllerRegion.ServiceBrake, ((1 - 0) / (-0.9 + 0.2)) * (cv + 0.9) + 1];
-        } else if (cv < 0.2 - 0.05) {
-            return ControllerRegion.Coast;
-        } else {
-            // scaled from 0 (min power) to 1 (max power)
-            return [ControllerRegion.Power, ((1 - 0) / (1 - 0.2)) * (cv - 1) + 1];
-        }
-    };
+    const masterController$ = frp.compose(
+            me.createOnCvChangeStreamFor("ThrottleAndBrake", 0),
+            frp.map(readMasterController)
+        ),
+        masterController = frp.stepper(
+            masterController$,
+            readMasterController(me.rv.GetControlValue("ThrottleAndBrake", 0) as number)
+        ),
+        acknowledge = () => (me.rv.GetControlValue("AWSReset", 0) as number) > 0.5,
+        coastOrBrake = () => {
+            const mc = frp.snapshot(masterController);
+            return (
+                mc === ControllerRegion.EmergencyBrake ||
+                mc === ControllerRegion.Coast ||
+                mc[0] === ControllerRegion.ServiceBrake
+            );
+        };
 
     // Configure and initialize safety systems.
     const cabSignal$ = frp.compose(
@@ -63,16 +67,39 @@ const me = new FrpEngine(() => {
     cabSignal$(_ => showCabSignal(frp.snapshot(cabAspect)));
     showCabSignal(frp.snapshot(cabAspect)); // Show the initialized cab aspect.
 
-    const acknowledge = () => (me.rv.GetControlValue("AWSReset", 0) as number) > 0.5,
-        coastOrBrake = () => {
+    const aleCutIn$ = cutInControl(me.createOnCvChangeStreamFor("ALECutIn", 0)),
+        movingPastCoast$ = frp.compose(
+            masterController$,
+            fsm<MasterController>(ControllerRegion.Coast),
+            frp.filter(
+                ([from, to]) => from !== to && (from === ControllerRegion.Coast || to === ControllerRegion.Coast)
+            )
+        ),
+        aleInputCancelsPenalty$ = frp.map(_ => ale.AlerterInput.ActivityThatCancelsPenalty)(movingPastCoast$),
+        isMaxBrakeOrEmergency = () => {
             const mc = frp.snapshot(masterController);
             return (
                 mc === ControllerRegion.EmergencyBrake ||
-                mc === ControllerRegion.Coast ||
-                mc[0] === ControllerRegion.ServiceBrake
+                (mc !== ControllerRegion.Coast && mc[0] === ControllerRegion.ServiceBrake && mc[1] >= 1)
             );
         },
-        ascCutIn$ = cutInControl(me.createOnCvChangeStreamFor("ATCCutIn", 0)),
+        horn = () => (me.rv.GetControlValue("Horn", 0) as number) > 0.5,
+        aleInput$ = frp.compose(
+            me.createUpdateStream(),
+            frp.filter(
+                (_: number) => frp.snapshot(isMaxBrakeOrEmergency) || frp.snapshot(acknowledge) || frp.snapshot(horn)
+            ),
+            frp.map(_ => ale.AlerterInput.Activity),
+            frp.merge(aleInputCancelsPenalty$)
+        ),
+        ale$ = frp.hub<ale.AlerterState>()(ale.create(me, aleInput$, aleCutIn$)),
+        aleAlarm$ = frp.map((state: ale.AlerterState) => state.alarm)(ale$);
+    aleAlarm$(alarm => {
+        me.rv.SetControlValue("AlerterIndicator", 0, alarm ? 1 : 0);
+        me.rv.SetControlValue("ALEAlarm", 0, alarm ? 1 : 0);
+    });
+
+    const ascCutIn$ = cutInControl(me.createOnCvChangeStreamFor("ATCCutIn", 0)),
         asc$ = frp.hub<asc.AscState>()(asc.create(me, cabAspect, acknowledge, coastOrBrake, ascCutIn$)),
         ascPenalty$ = frp.map((state: asc.AscState) => {
             switch (state.brakes) {
@@ -83,7 +110,10 @@ const me = new FrpEngine(() => {
                     return false;
             }
         })(asc$);
-    ascPenalty$(penalty => me.rv.SetControlValue("PenaltyIndicator", 0, penalty ? 1 : 0));
+    ascPenalty$(penalty => {
+        me.rv.SetControlValue("PenaltyIndicator", 0, penalty ? 1 : 0);
+        me.rv.SetControlValue("Overspeed", 0, penalty ? 1 : 0);
+    });
 
     const acsesCutIn$ = cutInControl(me.createOnCvChangeStreamFor("ACSESCutIn", 0)),
         acses$ = frp.hub<acses.AcsesState>()(acses.create(me, acknowledge, coastOrBrake, acsesCutIn$)),
@@ -123,26 +153,39 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("TrackSpeedUnits", 0, u);
     });
 
-    const isAnyOverspeed = frp.liftN(
+    const isAscOrAcsesOverspeed = frp.liftN(
             (ascPenalty, acsesOverspeed) => ascPenalty || acsesOverspeed,
             frp.stepper(ascPenalty$, false),
             frp.stepper(acsesOverspeed$, false)
         ),
-        isAnyOverspeed$ = frp.map(_ => frp.snapshot(isAnyOverspeed))(me.createUpdateStream());
-    isAnyOverspeed$(penalty => {
-        me.rv.SetControlValue("SpeedReductionAlert", 0, penalty ? 1 : 0);
+        isAscOrAcsesOverspeed$ = frp.map(_ => frp.snapshot(isAscOrAcsesOverspeed))(me.createUpdateStream());
+    isAscOrAcsesOverspeed$(overspeed => {
+        me.rv.SetControlValue("ATCAlarm", 0, overspeed ? 1 : 0);
+    });
+
+    const isAnyAlarm = frp.liftN(
+            (aleAlarm, ascPenalty, acsesOverspeed) => aleAlarm || ascPenalty || acsesOverspeed,
+            frp.stepper(aleAlarm$, false),
+            frp.stepper(ascPenalty$, false),
+            frp.stepper(acsesOverspeed$, false)
+        ),
+        isAnyAlarm$ = frp.map(_ => frp.snapshot(isAnyAlarm))(me.createUpdateStream());
+    isAnyAlarm$(alarm => {
+        me.rv.SetControlValue("AWSWarnCount", 0, alarm ? 1 : 0);
     });
 
     // Set up the throttle and brake wiring.
-    const ascBrake = frp.map((state: asc.AscState) => state.brakes)(asc$),
-        acsesBrake = frp.map((state: acses.AcsesState) => state.brakes)(acses$),
+    const aleBrake$ = frp.map((state: ale.AlerterState) => state.brakes)(ale$),
+        ascBrake$ = frp.map((state: asc.AscState) => state.brakes)(asc$),
+        acsesBrake$ = frp.map((state: acses.AcsesState) => state.brakes)(acses$),
         speedoMph$ = me.createGetCvStream("SpeedometerMPH", 0),
         speedoMph = frp.stepper(speedoMph$, 0),
         brakeCommand = frp.liftN(
-            (mc, ascBrake, acsesBrake): BrakeCommand => {
+            (mc, aleBrake, ascBrake, acsesBrake): BrakeCommand => {
                 if (ascBrake === asc.AscBrake.Emergency || mc === ControllerRegion.EmergencyBrake) {
                     return BrakeType.Emergency;
                 } else if (
+                    aleBrake === ale.AlerterBrake.Penalty ||
                     ascBrake === asc.AscBrake.Penalty ||
                     acsesBrake === acses.AcsesBrake.Penalty ||
                     acsesBrake === acses.AcsesBrake.PositiveStop
@@ -155,8 +198,9 @@ const me = new FrpEngine(() => {
                 }
             },
             masterController,
-            frp.stepper(ascBrake, asc.AscBrake.None),
-            frp.stepper(acsesBrake, acses.AcsesBrake.None)
+            frp.stepper(aleBrake$, ale.AlerterBrake.None),
+            frp.stepper(ascBrake$, asc.AscBrake.None),
+            frp.stepper(acsesBrake$, acses.AcsesBrake.None)
         ),
         brakeCommandWithLatch$ = frp.compose(
             me.createUpdateStream(),
@@ -324,6 +368,20 @@ const me = new FrpEngine(() => {
     me.activateUpdatesEveryFrame(true);
 });
 me.setup();
+
+function readMasterController(cv: number): MasterController {
+    if (cv < -0.9 - 0.05) {
+        return ControllerRegion.EmergencyBrake;
+    } else if (cv < -0.2 + 0.05) {
+        // scaled from 0 (min braking) to 1 (max service braking)
+        return [ControllerRegion.ServiceBrake, ((1 - 0) / (-0.9 + 0.2)) * (cv + 0.9) + 1];
+    } else if (cv < 0.2 - 0.05) {
+        return ControllerRegion.Coast;
+    } else {
+        // scaled from 0 (min power) to 1 (max power)
+        return [ControllerRegion.Power, ((1 - 0) / (1 - 0.2)) * (cv - 1) + 1];
+    }
+}
 
 function threeDigitDisplay(eventStream: frp.Stream<number>) {
     return frp.compose(
