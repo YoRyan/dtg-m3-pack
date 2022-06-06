@@ -58,7 +58,7 @@ const alertMarginMps = 3 * c.mph.toMps,
  * @param coastOrBrake A behavior that indicates the master controller has been
  * placed into a braking or the coast position.
  * @param cutIn An event stream that indicates the state of the cut in control.
- * @returns A collection of useful event streams.
+ * @returns An event stream that commmunicates all state for this system.
  */
 export function create(
     e: FrpEngine,
