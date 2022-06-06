@@ -38,6 +38,13 @@ const me = new FrpEngine(() => {
         return frp.filter((_: T) => me.eng.GetIsEngineWithKey());
     }
 
+    function createCutInStream(name: string, index: number) {
+        return frp.compose(
+            me.createOnCvChangeStreamFor(name, index),
+            frp.map((v: number) => v > 0.5)
+        );
+    }
+
     const masterController$ = frp.compose(
             me.createOnCvChangeStreamFor("ThrottleAndBrake", 0),
             frp.map(readMasterController)
@@ -67,7 +74,7 @@ const me = new FrpEngine(() => {
     cabSignal$(_ => showCabSignal(frp.snapshot(cabAspect)));
     showCabSignal(frp.snapshot(cabAspect)); // Show the initialized cab aspect.
 
-    const aleCutIn$ = cutInControl(me.createOnCvChangeStreamFor("ALECutIn", 0)),
+    const aleCutIn$ = createCutInStream("ALECutIn", 0),
         movingPastCoast$ = frp.compose(
             masterController$,
             fsm<MasterController>(ControllerRegion.Coast),
@@ -99,7 +106,7 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("ALEAlarm", 0, alarm ? 1 : 0);
     });
 
-    const ascCutIn$ = cutInControl(me.createOnCvChangeStreamFor("ATCCutIn", 0)),
+    const ascCutIn$ = createCutInStream("ATCCutIn", 0),
         asc$ = frp.hub<asc.AscState>()(asc.create(me, cabAspect, acknowledge, coastOrBrake, ascCutIn$)),
         ascPenalty$ = frp.map((state: asc.AscState) => {
             switch (state.brakes) {
@@ -115,7 +122,7 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("Overspeed", 0, penalty ? 1 : 0);
     });
 
-    const acsesCutIn$ = cutInControl(me.createOnCvChangeStreamFor("ACSESCutIn", 0)),
+    const acsesCutIn$ = createCutInStream("ACSESCutIn", 0),
         acses$ = frp.hub<acses.AcsesState>()(acses.create(me, acknowledge, coastOrBrake, acsesCutIn$)),
         acsesPenalty$ = frp.map((state: acses.AcsesState) => {
             switch (state.brakes) {
@@ -388,14 +395,6 @@ function threeDigitDisplay(eventStream: frp.Stream<number>) {
         eventStream,
         frp.map((n: number) => Math.round(Math.abs(n))),
         frp.map(n => m.digits(n, 3))
-    );
-}
-
-function cutInControl(eventStream: frp.Stream<number>) {
-    return frp.compose(
-        eventStream,
-        frp.filter((v: number) => v === 0 || v === 1),
-        frp.map(v => v === 1)
     );
 }
 

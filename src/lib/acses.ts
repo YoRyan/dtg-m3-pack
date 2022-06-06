@@ -66,11 +66,12 @@ export function create(
     coastOrBrake: frp.Behavior<boolean>,
     cutIn: frp.Stream<boolean>
 ): frp.Stream<AcsesState> {
-    const cutInOut$ = frp.compose(
-        cutIn,
-        fsm<undefined | boolean>(undefined),
-        frp.filter(([from, to]) => from !== undefined && from !== to)
-    );
+    const isPlayerEngine = () => e.eng.GetIsEngineWithKey(),
+        cutInOut$ = frp.compose(
+            cutIn,
+            fsm<boolean>(false),
+            frp.filter(([from, to]) => from !== to && frp.snapshot(isPlayerEngine))
+        );
     cutInOut$(([, to]) => {
         const msg = to ? "Enabled" : "Disabled";
         rw.ScenarioManager.ShowMessage("ACSES Track Speed Enforcement", msg, rw.MessageBox.Alert);
@@ -79,7 +80,7 @@ export function create(
     const isCutOut = frp.liftN(
             (cutIn, isPlayerEngine) => !(cutIn && isPlayerEngine),
             frp.stepper(cutIn, false),
-            () => e.eng.GetIsEngineWithKey()
+            isPlayerEngine
         ),
         pts$ = frp.compose(
             e.createOnCustomSignalMessageStream(),

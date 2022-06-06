@@ -53,11 +53,12 @@ export function create(
     input: frp.Stream<AlerterInput>,
     cutIn: frp.Stream<boolean>
 ): frp.Stream<AlerterState> {
-    const cutInOut$ = frp.compose(
-        cutIn,
-        fsm<undefined | boolean>(undefined),
-        frp.filter(([from, to]) => from !== undefined && from !== to)
-    );
+    const isPlayerEngine = () => e.eng.GetIsEngineWithKey(),
+        cutInOut$ = frp.compose(
+            cutIn,
+            fsm<boolean>(false),
+            frp.filter(([from, to]) => from !== to && frp.snapshot(isPlayerEngine))
+        );
     cutInOut$(([, to]) => {
         const msg = to ? "Enabled" : "Disabled";
         rw.ScenarioManager.ShowMessage("ALE Vigilance System", msg, rw.MessageBox.Alert);
@@ -66,7 +67,7 @@ export function create(
     const isCutOut = frp.liftN(
             (cutIn, isPlayerEngine) => !(cutIn && isPlayerEngine),
             frp.stepper(cutIn, false),
-            () => e.eng.GetIsEngineWithKey()
+            isPlayerEngine
         ),
         camera = frp.stepper(e.createCameraStream(), VehicleCamera.FrontCab),
         isExteriorCamera = () => {
