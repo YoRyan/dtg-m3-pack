@@ -8,7 +8,7 @@ import * as c from "../../../../../../../../lib/constants";
 import * as frp from "../../../../../../../../lib/frp";
 import { FrpEngine } from "../../../../../../../../lib/frp-engine";
 import { debug, fsm, rejectUndefined } from "../../../../../../../../lib/frp-extra";
-import { VehicleCamera } from "../../../../../../../../lib/frp-vehicle";
+import { VehicleAuthority, VehicleCamera } from "../../../../../../../../lib/frp-vehicle";
 import * as m from "../../../../../../../../lib/math";
 import * as rw from "../../../../../../../../lib/railworks";
 
@@ -17,7 +17,6 @@ type MasterController =
     | ControllerRegion.Coast
     | [ControllerRegion.ServiceBrake, number]
     | ControllerRegion.EmergencyBrake;
-
 enum ControllerRegion {
     Power,
     Coast,
@@ -26,11 +25,16 @@ enum ControllerRegion {
 }
 
 type BrakeCommand = BrakeType.None | [BrakeType.Service, number] | BrakeType.Emergency;
-
 enum BrakeType {
     None,
     Service,
     Emergency,
+}
+
+enum BrakeLight {
+    Green,
+    Amber,
+    Dark,
 }
 
 const me = new FrpEngine(() => {
@@ -50,7 +54,10 @@ const me = new FrpEngine(() => {
         );
     }
 
-    const masterController$ = frp.compose(
+    const authority$ = me.createAuthorityStream(),
+        authority = frp.stepper(authority$, VehicleAuthority.IsPlayer),
+        trueSpeedMps = () => me.rv.GetSpeed(),
+        masterController$ = frp.compose(
             me.createOnCvChangeStreamFor("ThrottleAndBrake", 0),
             frp.map(readMasterController)
         ),
@@ -373,6 +380,53 @@ const me = new FrpEngine(() => {
         passLight = new rw.Light("RoomLight_PassView");
     passLight$(on => passLight.Activate(on));
     passLight.Activate(false);
+
+    // Exterior lights.
+    const brakeLight = frp.liftN(
+            (authority, speedMps, brakeCylPsi) => {
+                if (authority === VehicleAuthority.IsPlayer) {
+                    if (brakeCylPsi <= 12) {
+                        return BrakeLight.Green;
+                    } else if (brakeCylPsi <= 15) {
+                        return BrakeLight.Dark;
+                    } else {
+                        return BrakeLight.Amber;
+                    }
+                } else if (authority === VehicleAuthority.IsAiParked) {
+                    return BrakeLight.Amber;
+                } else {
+                    const isSlow = Math.abs(speedMps) < 15 * c.mph.toMps;
+                    return isSlow ? BrakeLight.Amber : BrakeLight.Green;
+                }
+            },
+            authority,
+            trueSpeedMps,
+            () => me.rv.GetControlValue("TrainBrakeCylinderPressurePSI", 0) as number
+        ),
+        brakeLight$ = frp.map(_ => frp.snapshot(brakeLight))(me.createUpdateStream());
+    brakeLight$(status => {
+        me.rv.ActivateNode("SL_green", status === BrakeLight.Green);
+        me.rv.ActivateNode("SL_yellow", status === BrakeLight.Amber);
+    });
+    me.rv.ActivateNode("SL_blue", false);
+
+    const isTrueStopped = () => frp.snapshot(trueSpeedMps) < c.stopSpeed,
+        leftDoorOpen = frp.liftN(
+            (authority, stopped, playerDoor) => (authority === VehicleAuthority.IsPlayer ? playerDoor : stopped),
+            authority,
+            isTrueStopped,
+            () => (me.rv.GetControlValue("DoorsOpenCloseLeft", 0) as number) > 0.5
+        ),
+        leftDoorOpen$ = frp.map(_ => frp.snapshot(leftDoorOpen))(me.createUpdateStream()),
+        rightDoorOpen = frp.liftN(
+            (authority, stopped, playerDoor) => (authority === VehicleAuthority.IsPlayer ? playerDoor : stopped),
+            authority,
+            isTrueStopped,
+            () => (me.rv.GetControlValue("DoorsOpenCloseRight", 0) as number) > 0.5
+        ),
+        rightDoorOpen$ = frp.map(_ => frp.snapshot(rightDoorOpen))(me.createUpdateStream());
+    leftDoorOpen$(open => me.rv.ActivateNode("SL_doors_L", open));
+    rightDoorOpen$(open => me.rv.ActivateNode("SL_doors_R", open));
 
     // Process OnControlValueChange events.
     const onCvChange$ = me.createOnCvChangeStream();
