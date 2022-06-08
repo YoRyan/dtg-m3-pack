@@ -455,7 +455,7 @@ const me = new FrpEngine(() => {
         );
     throttle$(t => me.rv.SetControlValue("Regulator", 0, t));
     reverser$(r => {
-        let cv: number;
+        let cv;
         switch (r) {
             case Reverser.Reverse:
                 cv = -1;
