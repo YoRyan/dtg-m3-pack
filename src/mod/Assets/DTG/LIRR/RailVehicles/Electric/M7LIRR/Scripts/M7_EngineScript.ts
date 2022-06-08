@@ -124,7 +124,8 @@ const me = new FrpEngine(() => {
         lockReverserOutOfEmergency$ = frp.compose(
             me.createUpdateStream(),
             frp.filter((_: number) => frp.snapshot(masterController) !== ControllerRegion.EmergencyBrake),
-            frp.map(_ => me.rv.GetControlValue("UserVirtualReverser", 0) as number)
+            frp.map(_ => me.rv.GetControlValue("UserVirtualReverser", 0)),
+            rejectUndefined()
         ),
         lockMasterControllerKeyOut = frp.compose(
             me.createUpdateStream(),
