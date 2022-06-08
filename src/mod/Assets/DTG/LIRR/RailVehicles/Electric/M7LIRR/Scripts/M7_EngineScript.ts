@@ -32,10 +32,13 @@ enum Reverser {
 }
 
 type BrakeCommand = BrakeType.None | [BrakeType.Service, number] | BrakeType.Emergency;
+type BrakeEvent = BrakeType.Emergency | BrakeType.Autostart | [BrakeType.Charge, number];
 enum BrakeType {
     None,
     Service,
     Emergency,
+    Charge,
+    Autostart,
 }
 
 enum BrakeLight {
@@ -61,12 +64,12 @@ const me = new FrpEngine(() => {
         authority = frp.stepper(authority$, VehicleAuthority.IsPlayer),
         trueSpeedMps = () => me.rv.GetSpeed(),
         masterKey$ = frp.compose(
-            me.createOnCvChangeStreamFor("MasterKey", 0),
+            me.createGetCvStream("MasterKey", 0),
             frp.map((cv: number) => cv > 0.5)
         ),
         masterKey = frp.stepper(masterKey$, false),
         masterController$ = frp.compose(
-            me.createOnCvChangeStreamFor("ThrottleAndBrake", 0),
+            me.createGetCvStream("ThrottleAndBrake", 0),
             frp.map((cv: number): MasterController => {
                 if (cv < -0.9 - 0.05) {
                     return ControllerRegion.EmergencyBrake;
@@ -83,7 +86,7 @@ const me = new FrpEngine(() => {
         ),
         masterController = frp.stepper(masterController$, ControllerRegion.EmergencyBrake),
         reverser$ = frp.compose(
-            me.createOnCvChangeStreamFor("UserVirtualReverser", 0),
+            me.createGetCvStream("UserVirtualReverser", 0),
             frp.map((cv: number) => {
                 if (cv < 0 + 0.5) {
                     return Reverser.Reverse;
@@ -127,10 +130,18 @@ const me = new FrpEngine(() => {
             me.createUpdateStream(),
             frp.filter((_: number) => frp.snapshot(reverser) === Reverser.KeyOut)
         );
-    lockMasterKeyOn$(_ => me.rv.SetControlValue("MasterKey", 0, 1));
-    lockReverserKeyOut$(_ => me.rv.SetControlValue("UserVirtualReverser", 0, 3));
-    lockReverserOutOfEmergency$(cv => me.rv.SetControlValue("UserVirtualReverser", 0, Math.min(cv, 2)));
-    lockMasterControllerKeyOut(_ => me.rv.SetControlValue("ThrottleAndBrake", 0, -1));
+    lockMasterKeyOn$(_ => {
+        me.rv.SetControlValue("MasterKey", 0, 1);
+    });
+    lockReverserKeyOut$(_ => {
+        me.rv.SetControlValue("UserVirtualReverser", 0, 3);
+    });
+    lockReverserOutOfEmergency$(cv => {
+        me.rv.SetControlValue("UserVirtualReverser", 0, Math.min(cv, 2));
+    });
+    lockMasterControllerKeyOut(_ => {
+        me.rv.SetControlValue("ThrottleAndBrake", 0, -1);
+    });
 
     // Configure and initialize safety systems.
     const cabSignal$ = frp.compose(
@@ -307,16 +318,26 @@ const me = new FrpEngine(() => {
     });
 
     // Set up throttle, reverser, dynamic brake, and air brake wiring.
-    const aleBrake$ = frp.map((state: ale.AlerterState) => state.brakes)(ale$),
+    const airBrakeChargeThreshold = 0.37, // 90 psi BP
+        aleBrake$ = frp.map((state: ale.AlerterState) => state.brakes)(ale$),
         ascBrake$ = frp.map((state: asc.AscState) => state.brakes)(asc$),
         acsesBrake$ = frp.map((state: acses.AcsesState) => state.brakes)(acses$),
         speedoMph$ = me.createGetCvStream("SpeedometerMPH", 0),
         speedoMph = frp.stepper(speedoMph$, 0),
+        // Emergency brake push button with the backspace key, HUD, or pull cord.
         emergencyPullCord$ = frp.compose(
             me.createOnCvChangeStreamFor("VirtualEmergencyBrake", 0),
             frp.filter((cv: number) => cv >= 1),
-            frp.map((_): BrakeCommand => BrakeType.Emergency)
+            frp.map((_): BrakeEvent => BrakeType.Emergency)
         ),
+        // Easy autostart with the startup control.
+        startupCommand$ = me.createOnCvChangeStreamFor("VirtualStartup", 0),
+        startupOn$ = frp.compose(
+            startupCommand$,
+            frp.filter((cv: number) => cv >= 1),
+            frp.map((_): BrakeEvent => BrakeType.Autostart)
+        ),
+        startupOff$ = frp.filter((cv: number) => cv <= -1)(startupCommand$),
         brakeCommand = frp.liftN(
             (mc, aleBrake, ascBrake, acsesBrake): BrakeCommand => {
                 if (ascBrake === asc.AscBrake.Emergency || mc === ControllerRegion.EmergencyBrake) {
@@ -339,26 +360,62 @@ const me = new FrpEngine(() => {
             frp.stepper(ascBrake$, asc.AscBrake.None),
             frp.stepper(acsesBrake$, acses.AcsesBrake.None)
         ),
-        brakeCommandWithLatch$ = frp.compose(
-            me.createUpdateStream(),
-            frp.map((_: number) => frp.snapshot(brakeCommand)),
-            frp.merge(emergencyPullCord$),
-            frp.fold<BrakeCommand, BrakeCommand>((accum, command) => {
-                const isStopped = Math.abs(frp.snapshot(speedoMph)) < c.stopSpeed,
-                    brakePipeDischarged = frp.snapshot(brakePipePsi) <= 0;
-                if (command === BrakeType.Emergency) {
-                    return BrakeType.Emergency;
-                } else if (accum === BrakeType.Emergency && !(isStopped && brakePipeDischarged)) {
-                    return BrakeType.Emergency;
-                } else {
-                    return command;
-                }
-            }, BrakeType.None)
+        brakesCanCharge = frp.liftN(
+            (brakes, isCharging) => {
+                return (
+                    brakes !== BrakeType.Emergency &&
+                    brakes !== BrakeType.None &&
+                    brakes[1] >= 1 - 0.05 && // max brake
+                    isCharging
+                );
+            },
+            brakeCommand,
+            () => (me.rv.GetControlValue("Charging", 0) as number) > 0.5
         ),
-        brakeCommandWithLatch = frp.stepper(brakeCommandWithLatch$, BrakeType.None),
+        chargeBrakes$ = frp.compose(
+            me.createUpdateStream(),
+            forPlayerEngine<number>(),
+            fsm(0),
+            frp.map(([from, to]) => {
+                const chargePerSecond = 0.063; // 10 seconds to recharge to service braking
+                return frp.snapshot(brakesCanCharge) ? chargePerSecond * (to - from) : 0;
+            }),
+            frp.filter(charge => charge > 0),
+            frp.map((charge): BrakeEvent => [BrakeType.Charge, charge])
+        ),
+        brakeCommandAndEvents$ = frp.compose(
+            me.createUpdateStream(),
+            forPlayerEngine<number>(),
+            frp.map(_ => frp.snapshot(brakeCommand)),
+            frp.merge(emergencyPullCord$),
+            frp.merge(startupOn$),
+            frp.merge(chargeBrakes$),
+            frp.hub()
+        ),
+        emergencyBrakeCanRelease = frp.liftN(
+            (speedMph, bpPsi) => speedMph < c.stopSpeed && bpPsi <= 0,
+            speedoMph,
+            brakePipePsi
+        ),
+        emergencyBrake$ = frp.compose(
+            brakeCommandAndEvents$,
+            frp.fold<boolean, BrakeCommand | BrakeEvent>((accum, command) => {
+                if (command === BrakeType.Emergency) {
+                    return true;
+                } else if (command === BrakeType.Autostart) {
+                    return false;
+                } else if (accum) {
+                    return !frp.snapshot(emergencyBrakeCanRelease);
+                } else {
+                    return false;
+                }
+            }, false),
+            frp.hub()
+        ),
+        emergencyBrake = frp.stepper(emergencyBrake$, false),
         throttleCommand = frp.liftN(
-            (mc, brakes) => {
-                if (brakes !== BrakeType.None) {
+            (mc, emergencyBrake) => {
+                if (emergencyBrake) {
                     return 0;
                 } else if (
                     mc !== ControllerRegion.Coast &&
@@ -371,7 +428,7 @@ const me = new FrpEngine(() => {
                 }
             },
             masterController,
-            brakeCommandWithLatch
+            emergencyBrake
         ),
         throttle$ = frp.compose(
             me.createUpdateStream(),
@@ -385,12 +442,17 @@ const me = new FrpEngine(() => {
             forPlayerEngine<number>(),
             fsm(0),
             frp.map(([from, to]): [dt: number, target: number] => {
-                const brakes = frp.snapshot(brakeCommandWithLatch);
+                const brakes = frp.snapshot(brakeCommand);
                 let target;
-                if (brakes === BrakeType.None || brakes === BrakeType.Emergency) {
-                    target = 0;
-                } else {
-                    target = ((1 - 0.25) / (1 - 0)) * (brakes[1] - 1) + 1;
+                switch (brakes) {
+                    case BrakeType.None:
+                    case BrakeType.Emergency:
+                    case BrakeType.Autostart:
+                        target = 0;
+                        break;
+                    default:
+                        target = ((1 - 0.25) / (1 - 0)) * (brakes[1] - 1) + 1;
+                        break;
                 }
                 return [to - from, target];
             }),
@@ -403,55 +465,35 @@ const me = new FrpEngine(() => {
             // Physics are calibrated for a 12-car train.
             frp.map((v: number) => (v * frp.snapshot(nMultipleUnits)) / 12)
         ),
-        airBrakeCommand = frp.liftN(
-            (brakes, speedMph) => {
+        airBrake$ = frp.compose(
+            brakeCommandAndEvents$,
+            frp.fold<number, BrakeCommand | BrakeEvent>((accum, brakes) => {
                 if (brakes === BrakeType.Emergency) {
                     return 1;
-                } else if (brakes === BrakeType.None) {
-                    return 0;
+                } else if (accum > airBrakeChargeThreshold) {
+                    if (brakes === BrakeType.Autostart) {
+                        return airBrakeChargeThreshold;
+                    } else if (brakes !== BrakeType.None && brakes[0] === BrakeType.Charge) {
+                        return accum - brakes[1];
+                    } else {
+                        return accum;
+                    }
                 } else {
-                    const minService = 0.048, // 13 psi BC
-                        maxService = 0.137, // 43 psi BC
-                        floor = 0.035, // 8 psi BC
-                        proportion = blendedAirBrake(speedMph * c.mph.toMps);
-                    return Math.max(
-                        (((maxService - minService) / (1 - 0)) * (brakes[1] - 0) + minService) * proportion,
-                        floor
-                    );
+                    if (brakes === BrakeType.None) {
+                        return 0;
+                    } else if (brakes !== BrakeType.Autostart && brakes[0] === BrakeType.Service) {
+                        return airBrakeServiceRange(frp.snapshot(speedoMph) * c.mps.toMph, brakes[1]);
+                    } else {
+                        return accum;
+                    }
                 }
-            },
-            brakeCommandWithLatch,
-            speedoMph
+            }, 1),
+            frp.hub()
         ),
-        // Require the air brake to be charged after being placed in emergency.
-        brakesCharging = frp.liftN(
-            (brakes, isCharging) => {
-                return (
-                    brakes !== BrakeType.Emergency && brakes !== BrakeType.None && brakes[1] >= 1 - 0.05 && isCharging
-                );
-            },
-            brakeCommandWithLatch,
-            () => (me.rv.GetControlValue("Charging", 0) as number) > 0.5
-        ),
-        airBrake$ = frp.compose(
-            me.createUpdateStream(),
-            forPlayerEngine<number>(),
-            fsm(0),
-            frp.map(([from, to]) => {
-                const chargePerSecond = 0.063; // 10 seconds to recharge to service braking
-                return frp.snapshot(brakesCharging) ? chargePerSecond * (to - from) : 0;
-            }),
-            frp.fold<number, number>((accum, charge) => {
-                const threshold = 0.37, // 90 psi BP
-                    applied = frp.snapshot(airBrakeCommand);
-                if (applied >= 1) {
-                    return 1;
-                } else if (accum > threshold) {
-                    return accum - charge;
-                } else {
-                    return applied;
-                }
-            }, 0)
+        startupState$ = frp.compose(
+            airBrake$,
+            frp.map((applied: number) => applied <= airBrakeChargeThreshold),
+            fsm(false)
         );
     throttle$(t => me.rv.SetControlValue("Regulator", 0, t));
     reverser$(r => {
@@ -471,9 +513,32 @@ const me = new FrpEngine(() => {
         }
         me.rv.SetControlValue("Reverser", 0, cv);
     });
-    airBrake$(a => me.rv.SetControlValue("TrainBrakeControl", 0, a));
-    dynamicBrake$(d => me.rv.SetControlValue("DynamicBrake", 0, d));
-    emergencyPullCord$(_ => me.rv.SetControlValue("VirtualEmergencyBrake", 0, 0)); // Reset the pull cord if tripped.
+    airBrake$(a => {
+        me.rv.SetControlValue("TrainBrakeControl", 0, a);
+    });
+    dynamicBrake$(d => {
+        me.rv.SetControlValue("DynamicBrake", 0, d);
+    });
+    emergencyPullCord$(_ => {
+        me.rv.SetControlValue("VirtualEmergencyBrake", 0, 0); // Reset the pull cord if tripped.
+    });
+    startupState$(([from, to]) => {
+        if (!from && to) {
+            me.rv.SetControlValue("VirtualStartup", 0, 1);
+        } else if (from && !to) {
+            me.rv.SetControlValue("VirtualStartup", 0, -1);
+        }
+    });
+    startupOn$(_ => {
+        me.rv.SetControlValue("MasterKey", 0, 1);
+        me.rv.SetControlValue("UserVirtualReverser", 0, 1);
+        me.rv.SetControlValue("ThrottleAndBrake", 0, -0.9);
+    });
+    startupOff$(_ => {
+        me.rv.SetControlValue("MasterKey", 0, 0);
+        me.rv.SetControlValue("UserVirtualReverser", 0, 3);
+        me.rv.SetControlValue("ThrottleAndBrake", 0, -1);
+    });
 
     // Set indicators on the driving display.
     const speedoMphDigits$ = frp.compose(speedoMph$, forPlayerEngine<number>(), threeDigitDisplay),
@@ -501,8 +566,8 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("CylinderUnits", 0, digits[2]);
         me.rv.SetControlValue("CylGuide", 0, guide);
     });
-    brakeCommandWithLatch$(brakes => {
-        me.rv.SetControlValue("EmergencyBrakesIndicator", 0, brakes === BrakeType.Emergency ? 1 : 0);
+    emergencyBrake$(bie => {
+        me.rv.SetControlValue("EmergencyBrakesIndicator", 0, bie ? 1 : 0);
     });
 
     // Interior lights.
@@ -560,8 +625,12 @@ const me = new FrpEngine(() => {
             () => (me.rv.GetControlValue("DoorsOpenCloseRight", 0) as number) > 0.5
         ),
         rightDoorOpen$ = frp.map(_ => frp.snapshot(rightDoorOpen))(me.createUpdateStream());
-    leftDoorOpen$(open => me.rv.ActivateNode("SL_doors_L", open));
-    rightDoorOpen$(open => me.rv.ActivateNode("SL_doors_R", open));
+    leftDoorOpen$(open => {
+        me.rv.ActivateNode("SL_doors_L", open);
+    });
+    rightDoorOpen$(open => {
+        me.rv.ActivateNode("SL_doors_R", open);
+    });
 
     // Process OnControlValueChange events.
     const onCvChange$ = me.createOnCvChangeStream();
@@ -580,14 +649,19 @@ function threeDigitDisplay(eventStream: frp.Stream<number>) {
     );
 }
 
-function blendedAirBrake(speedMps: number) {
-    const transitionMph: [start: number, end: number] = [1.341, 3.576], // from 3 to 8 mph
-        aSpeedMps = Math.abs(speedMps);
+function airBrakeServiceRange(speedMps: number, application: number) {
+    const aSpeedMps = Math.abs(speedMps),
+        transitionMph: [start: number, end: number] = [1.341, 3.576], // from 3 to 8 mph
+        minService = 0.048, // 13 psi BC
+        maxService = 0.137, // 43 psi BC
+        floor = 0.035; // 8 psi BC
+    let proportion;
     if (aSpeedMps < transitionMph[0]) {
-        return 1;
+        proportion = 1;
     } else if (aSpeedMps < transitionMph[1]) {
-        return (-1 / (transitionMph[1] - transitionMph[0])) * (aSpeedMps - transitionMph[1]);
+        proportion = (-1 / (transitionMph[1] - transitionMph[0])) * (aSpeedMps - transitionMph[1]);
     } else {
-        return 0;
+        proportion = 0;
     }
+    return Math.max((((maxService - minService) / (1 - 0)) * (application - 0) + minService) * proportion, floor);
 }
