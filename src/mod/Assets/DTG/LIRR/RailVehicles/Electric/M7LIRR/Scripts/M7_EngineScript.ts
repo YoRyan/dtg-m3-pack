@@ -310,6 +310,11 @@ const me = new FrpEngine(() => {
         acsesBrake$ = frp.map((state: acses.AcsesState) => state.brakes)(acses$),
         speedoMph$ = me.createGetCvStream("SpeedometerMPH", 0),
         speedoMph = frp.stepper(speedoMph$, 0),
+        emergencyPullCord$ = frp.compose(
+            me.createOnCvChangeStreamFor("VirtualEmergencyBrake", 0),
+            frp.filter((cv: number) => cv >= 1),
+            frp.map((_): BrakeCommand => BrakeType.Emergency)
+        ),
         brakeCommand = frp.liftN(
             (mc, aleBrake, ascBrake, acsesBrake): BrakeCommand => {
                 if (ascBrake === asc.AscBrake.Emergency || mc === ControllerRegion.EmergencyBrake) {
@@ -335,6 +340,7 @@ const me = new FrpEngine(() => {
         brakeCommandWithLatch$ = frp.compose(
             me.createUpdateStream(),
             frp.map((_: number) => frp.snapshot(brakeCommand)),
+            frp.merge(emergencyPullCord$),
             frp.fold<BrakeCommand, BrakeCommand>((accum, command) => {
                 const isStopped = Math.abs(frp.snapshot(speedoMph)) < c.stopSpeed;
                 if (command === BrakeType.Emergency) {
@@ -464,6 +470,7 @@ const me = new FrpEngine(() => {
     });
     airBrake$(a => me.rv.SetControlValue("TrainBrakeControl", 0, a));
     dynamicBrake$(d => me.rv.SetControlValue("DynamicBrake", 0, d));
+    emergencyPullCord$(_ => me.rv.SetControlValue("VirtualEmergencyBrake", 0, 0)); // Reset the pull cord if tripped.
 
     // Set indicators on the driving display.
     const speedoMphDigits$ = frp.compose(speedoMph$, forPlayerEngine<number>(), threeDigitDisplay),
