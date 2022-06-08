@@ -105,7 +105,9 @@ const me = new FrpEngine(() => {
                 mc === ControllerRegion.Coast ||
                 mc[0] === ControllerRegion.ServiceBrake
             );
-        };
+        },
+        brakePipePsi$ = me.createGetCvStream("AirBrakePipePressurePSI", 0),
+        brakePipePsi = frp.stepper(brakePipePsi$, 0);
 
     // Lock controls as necessary for the startup sequence.
     const lockMasterKeyOn$ = frp.compose(
@@ -342,10 +344,11 @@ const me = new FrpEngine(() => {
             frp.map((_: number) => frp.snapshot(brakeCommand)),
             frp.merge(emergencyPullCord$),
             frp.fold<BrakeCommand, BrakeCommand>((accum, command) => {
-                const isStopped = Math.abs(frp.snapshot(speedoMph)) < c.stopSpeed;
+                const isStopped = Math.abs(frp.snapshot(speedoMph)) < c.stopSpeed,
+                    brakePipeDischarged = frp.snapshot(brakePipePsi) <= 0;
                 if (command === BrakeType.Emergency) {
                     return BrakeType.Emergency;
-                } else if (accum === BrakeType.Emergency && !isStopped) {
+                } else if (accum === BrakeType.Emergency && !(isStopped && brakePipeDischarged)) {
                     return BrakeType.Emergency;
                 } else {
                     return command;
@@ -474,11 +477,7 @@ const me = new FrpEngine(() => {
 
     // Set indicators on the driving display.
     const speedoMphDigits$ = frp.compose(speedoMph$, forPlayerEngine<number>(), threeDigitDisplay),
-        brakePipePsiDigits$ = frp.compose(
-            me.createGetCvStream("AirBrakePipePressurePSI", 0),
-            forPlayerEngine<number>(),
-            threeDigitDisplay
-        ),
+        brakePipePsiDigits$ = frp.compose(brakePipePsi$, forPlayerEngine<number>(), threeDigitDisplay),
         brakeCylinderPsiDigits$ = frp.compose(
             me.createGetCvStream("TrainBrakeCylinderPressurePSI", 0),
             forPlayerEngine<number>(),
