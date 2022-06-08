@@ -58,13 +58,15 @@ const alertMarginMps = 3 * c.mph.toMps,
  * @param coastOrBrake A behavior that indicates the master controller has been
  * placed into a braking or the coast position.
  * @param cutIn An event stream that indicates the state of the cut in control.
+ * @param hasPower A behavior that indicates the unit is powered and keyed in.
  * @returns An event stream that commmunicates all state for this system.
  */
 export function create(
     e: FrpEngine,
     acknowledge: frp.Behavior<boolean>,
     coastOrBrake: frp.Behavior<boolean>,
-    cutIn: frp.Stream<boolean>
+    cutIn: frp.Stream<boolean>,
+    hasPower: frp.Behavior<boolean>
 ): frp.Stream<AcsesState> {
     const isPlayerEngine = () => e.eng.GetIsEngineWithKey(),
         cutInOut$ = frp.compose(
@@ -78,8 +80,9 @@ export function create(
     });
 
     const isCutOut = frp.liftN(
-            (cutIn, isPlayerEngine) => !(cutIn && isPlayerEngine),
+            (cutIn, hasPower, isPlayerEngine) => !(cutIn && hasPower && isPlayerEngine),
             frp.stepper(cutIn, false),
+            hasPower,
             isPlayerEngine
         ),
         pts$ = frp.compose(

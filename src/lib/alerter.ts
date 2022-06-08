@@ -46,12 +46,14 @@ const countdownS = 25,
  * @param input An event stream that represents the engineer's inputs to the
  * alerter.
  * @param cutIn An event stream that indicates the state of the cut in control.
+ * @param hasPower A behavior that indicates the unit is powered and keyed in.
  * @returns An event stream that commmunicates all state for this system.
  */
 export function create(
     e: FrpEngine,
     input: frp.Stream<AlerterInput>,
-    cutIn: frp.Stream<boolean>
+    cutIn: frp.Stream<boolean>,
+    hasPower: frp.Behavior<boolean>
 ): frp.Stream<AlerterState> {
     const isPlayerEngine = () => e.eng.GetIsEngineWithKey(),
         cutInOut$ = frp.compose(
@@ -65,8 +67,9 @@ export function create(
     });
 
     const isCutOut = frp.liftN(
-            (cutIn, isPlayerEngine) => !(cutIn && isPlayerEngine),
+            (cutIn, hasPower, isPlayerEngine) => !(cutIn && hasPower && isPlayerEngine),
             frp.stepper(cutIn, false),
+            hasPower,
             isPlayerEngine
         ),
         camera = frp.stepper(e.createCameraStream(), VehicleCamera.FrontCab),
