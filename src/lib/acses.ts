@@ -17,16 +17,21 @@ export enum AcsesBrake {
     PositiveStop,
 }
 
+type AcsesMode =
+    | AcsesModeType.Normal
+    | [mode: AcsesModeType.Alert, countdownS: number]
+    | AcsesModeType.Penalty
+    | AcsesModeType.PenaltyAcknowledged;
 type AcsesAccum = {
     advanceLimits: Map<number, AdvanceLimitHazard>;
-    mode: AcsesMode.Normal | AlertEvent | AcsesMode.Penalty | AcsesMode.PenaltyAcknowledged;
+    mode: AcsesMode;
     positiveStop: boolean;
     overspeed: boolean;
     trackSpeedMps: number | undefined;
 };
-type AlertEvent = { startClockS: number };
-enum AcsesMode {
+enum AcsesModeType {
     Normal,
+    Alert,
     Penalty,
     PenaltyAcknowledged,
 }
@@ -150,26 +155,28 @@ export function create(
                     ).trackSpeedMps as number,
                     isPositiveStop = inForce instanceof StopSignalHazard,
                     isOverspeed = aSpeedMps > inForce.alertCurveMps;
-                let mode;
-                if (accum.mode === AcsesMode.Penalty) {
-                    mode = frp.snapshot(acknowledge) ? AcsesMode.PenaltyAcknowledged : AcsesMode.Penalty;
+                let mode: AcsesMode;
+                if (accum.mode === AcsesModeType.Penalty) {
+                    mode = frp.snapshot(acknowledge) ? AcsesModeType.PenaltyAcknowledged : AcsesModeType.Penalty;
                 } else if (
-                    accum.mode === AcsesMode.PenaltyAcknowledged &&
+                    accum.mode === AcsesModeType.PenaltyAcknowledged &&
                     isPositiveStop &&
                     inForce.penaltyCurveMps < 1
                 ) {
-                    mode = AcsesMode.PenaltyAcknowledged;
-                } else if (accum.mode === AcsesMode.PenaltyAcknowledged) {
+                    mode = AcsesModeType.PenaltyAcknowledged;
+                } else if (accum.mode === AcsesModeType.PenaltyAcknowledged) {
                     mode =
-                        !isOverspeed && frp.snapshot(coastOrBrake) ? AcsesMode.Normal : AcsesMode.PenaltyAcknowledged;
-                } else if (accum.mode === AcsesMode.Normal) {
-                    mode = isOverspeed ? { startClockS: t } : AcsesMode.Normal;
+                        !isOverspeed && frp.snapshot(coastOrBrake)
+                            ? AcsesModeType.Normal
+                            : AcsesModeType.PenaltyAcknowledged;
+                } else if (accum.mode === AcsesModeType.Normal) {
+                    mode = isOverspeed ? [AcsesModeType.Alert, t] : AcsesModeType.Normal;
                 } else if (aSpeedMps > inForce.penaltyCurveMps) {
-                    mode = AcsesMode.Penalty;
-                } else if (t - accum.mode.startClockS > alertCountdownS) {
-                    mode = AcsesMode.Penalty;
+                    mode = AcsesModeType.Penalty;
+                } else if (t - accum.mode[1] > alertCountdownS) {
+                    mode = AcsesModeType.Penalty;
                 } else if (!isOverspeed) {
-                    mode = AcsesMode.Normal;
+                    mode = AcsesModeType.Normal;
                 } else {
                     mode = accum.mode;
                 }
@@ -183,7 +190,7 @@ export function create(
             },
             {
                 advanceLimits: new Map<number, AdvanceLimitHazard>(),
-                mode: AcsesMode.Normal,
+                mode: AcsesModeType.Normal,
                 positiveStop: false,
                 overspeed: false,
                 trackSpeedMps: undefined,
@@ -192,7 +199,7 @@ export function create(
         ),
         frp.map(accum => {
             let brakes;
-            if (accum.mode === AcsesMode.Penalty || accum.mode === AcsesMode.PenaltyAcknowledged) {
+            if (accum.mode === AcsesModeType.Penalty || accum.mode === AcsesModeType.PenaltyAcknowledged) {
                 brakes = accum.positiveStop ? AcsesBrake.PositiveStop : AcsesBrake.Penalty;
             } else {
                 brakes = AcsesBrake.None;
