@@ -502,6 +502,9 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("CylinderUnits", 0, digits[2]);
         me.rv.SetControlValue("CylGuide", 0, guide);
     });
+    brakeCommandWithLatch$(brakes => {
+        me.rv.SetControlValue("EmergencyBrakesIndicator", 0, brakes === BrakeType.Emergency ? 1 : 0);
+    });
 
     // Interior lights.
     const cabLight$ = frp.map((v: number) => v > 0.5)(me.createOnCvChangeStreamFor("Cablight", 0)),
