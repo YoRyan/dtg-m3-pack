@@ -189,7 +189,7 @@ export function create(
         ),
         frp.map(accum => {
             let brakes;
-            if (accum.mode === AcsesMode.Penalty) {
+            if (accum.mode === AcsesMode.Penalty || accum.mode === AcsesMode.PenaltyAcknowledged) {
                 brakes = accum.positiveStop ? AcsesBrake.PositiveStop : AcsesBrake.Penalty;
             } else {
                 brakes = AcsesBrake.None;
