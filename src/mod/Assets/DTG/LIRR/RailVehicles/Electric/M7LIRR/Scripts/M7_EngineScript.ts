@@ -249,24 +249,22 @@ const me = new FrpEngine(() => {
             frp.map(pc => cs.toLirrAspect(pc))
         ),
         cabAspect = frp.stepper(cabSignal$, cs.LirrAspect.Speed15),
-        signalSpeedControl = frp.liftN(
-            (aspect, hasPower) =>
+        setSignalSpeed$ = me.createUpdateStreamForBehavior(
+            frp.liftN(
+                (aspect, hasPower) =>
+                    hasPower
+                        ? {
+                              [cs.LirrAspect.Speed15]: 15,
+                              [cs.LirrAspect.Speed30]: 30,
+                              [cs.LirrAspect.Speed40]: 40,
+                              [cs.LirrAspect.Speed60]: 60,
+                              [cs.LirrAspect.Speed70]: 70,
+                              [cs.LirrAspect.Speed80]: 80,
+                          }[aspect]
+                        : 0,
+                cabAspect,
                 hasPower
-                    ? {
-                          [cs.LirrAspect.Speed15]: 15,
-                          [cs.LirrAspect.Speed30]: 30,
-                          [cs.LirrAspect.Speed40]: 40,
-                          [cs.LirrAspect.Speed60]: 60,
-                          [cs.LirrAspect.Speed70]: 70,
-                          [cs.LirrAspect.Speed80]: 80,
-                      }[aspect]
-                    : 0,
-            cabAspect,
-            hasPower
-        ),
-        setSignalSpeed$ = frp.compose(
-            me.createUpdateStream(),
-            frp.map((_: number) => frp.snapshot(signalSpeedControl))
+            )
         );
     setSignalSpeed$(cv => me.rv.SetControlValue("SignalSpeedLimit", 0, cv));
 
@@ -291,84 +289,65 @@ const me = new FrpEngine(() => {
             () => (me.rv.GetControlValue("Horn", 0) as number) > 0.5
         ),
         aleInput$ = frp.compose(
-            me.createUpdateStream(),
-            frp.filter((_: number) => frp.snapshot(aleActivity)),
-            frp.map(_ => ale.AlerterInput.Activity),
+            me.createUpdateStreamForBehavior(() => ale.AlerterInput.Activity),
+            frp.filter<ale.AlerterInput>(_ => frp.snapshot(aleActivity)),
             frp.merge(aleInputCancelsPenalty$)
         ),
-        ale$ = frp.hub<ale.AlerterState>()(ale.create(me, aleInput$, aleCutIn$, hasPower)),
-        aleAlarm$ = frp.map((state: ale.AlerterState) => state.alarm)(ale$);
-    aleAlarm$(alarm => {
-        me.rv.SetControlValue("AlerterIndicator", 0, alarm ? 1 : 0);
-        me.rv.SetControlValue("ALEAlarm", 0, alarm ? 1 : 0);
+        ale$ = frp.compose(ale.create(me, aleInput$, aleCutIn$, hasPower), frp.hub<ale.AlerterState>()),
+        aleState = frp.stepper(ale$, ale.initState);
+    ale$(state => {
+        me.rv.SetControlValue("AlerterIndicator", 0, state.alarm ? 1 : 0);
+        me.rv.SetControlValue("ALEAlarm", 0, state.alarm ? 1 : 0);
     });
 
     const ascCutIn$ = createCutInStream("ATCCutIn", 0),
-        ascCutIn = frp.stepper(ascCutIn$, false),
-        ascStatus = frp.liftN(
-            (cutIn, hasPower) => {
-                if (hasPower) {
-                    return cutIn ? 1 : 0;
-                } else {
-                    return -1;
-                }
-            },
-            ascCutIn,
-            hasPower
+        setAscStatus$ = me.createUpdateStreamForBehavior(
+            frp.liftN(
+                (cutIn, hasPower) => {
+                    if (hasPower) {
+                        return cutIn ? 1 : 0;
+                    } else {
+                        return -1;
+                    }
+                },
+                frp.stepper(ascCutIn$, false),
+                hasPower
+            )
         ),
-        setAscStatus$ = frp.compose(
-            me.createUpdateStream(),
-            frp.map((_: number) => frp.snapshot(ascStatus))
+        asc$ = frp.compose(
+            asc.create(me, cabAspect, acknowledge, coastOrBrake, ascCutIn$, hasPower),
+            frp.hub<asc.AscState>()
         ),
-        asc$ = frp.hub<asc.AscState>()(asc.create(me, cabAspect, acknowledge, coastOrBrake, ascCutIn$, hasPower)),
-        ascPenalty$ = frp.map((state: asc.AscState) => {
-            switch (state.brakes) {
-                case asc.AscBrake.Emergency:
-                case asc.AscBrake.Penalty:
-                    return true;
-                default:
-                    return false;
-            }
-        })(asc$);
+        ascState = frp.stepper(asc$, asc.initState);
     setAscStatus$(status => {
         me.rv.SetControlValue("ATCStatus", 0, status);
     });
-    ascPenalty$(penalty => {
+    asc$(state => {
+        const penalty = isAscPenalty(state);
         me.rv.SetControlValue("PenaltyIndicator", 0, penalty ? 1 : 0);
         me.rv.SetControlValue("Overspeed", 0, penalty ? 1 : 0);
         me.rv.SetControlValue("ATCAlarm", 0, penalty ? 1 : 0);
     });
 
     const acsesCutIn$ = createCutInStream("ACSESCutIn", 0),
-        acsesCutIn = frp.stepper(acsesCutIn$, false),
-        acsesStatus = frp.liftN(
-            (cutIn, hasPower) => {
-                if (hasPower) {
-                    return cutIn ? 2 : 0;
-                } else {
-                    return -1;
-                }
-            },
-            acsesCutIn,
-            hasPower
+        setAcsesStatus$ = me.createUpdateStreamForBehavior(
+            frp.liftN(
+                (cutIn, hasPower) => {
+                    if (hasPower) {
+                        return cutIn ? 2 : 0;
+                    } else {
+                        return -1;
+                    }
+                },
+                frp.stepper(acsesCutIn$, false),
+                hasPower
+            )
         ),
-        setAcsesStatus$ = frp.compose(
-            me.createUpdateStream(),
-            frp.map((_: number) => frp.snapshot(acsesStatus))
+        acses$ = frp.compose(
+            acses.create(me, acknowledge, coastOrBrake, acsesCutIn$, hasPower),
+            frp.hub<acses.AcsesState>()
         ),
-        acses$ = frp.hub<acses.AcsesState>()(acses.create(me, acknowledge, coastOrBrake, acsesCutIn$, hasPower)),
-        acsesPenalty$ = frp.map((state: acses.AcsesState) => {
-            switch (state.brakes) {
-                case acses.AcsesBrake.Penalty:
-                case acses.AcsesBrake.PositiveStop:
-                    return true;
-                default:
-                    return false;
-            }
-        })(acses$),
-        acsesOverspeed$ = frp.map((state: acses.AcsesState) => state.overspeed)(acses$),
-        acsesStop$ = frp.map((state: acses.AcsesState) => state.brakes === acses.AcsesBrake.PositiveStop)(acses$),
-        trackSpeedMps$ = frp.map((state: acses.AcsesState) => state.trackSpeedMps)(acses$),
+        acsesState = frp.stepper(acses$, acses.initState),
         acsesBeep$ = frp.compose(
             acses$,
             fsm<acses.AcsesState>(acses.initState),
@@ -382,22 +361,18 @@ const me = new FrpEngine(() => {
     setAcsesStatus$(status => {
         me.rv.SetControlValue("ACSESStatus", 0, status);
     });
-    acsesPenalty$(penalty => {
+    acses$(state => {
+        const penalty = isAcsesPenalty(state);
         me.rv.SetControlValue("ACSESPenalty", 0, penalty ? 1 : 0);
-    });
-    acsesOverspeed$(overspeed => {
-        me.rv.SetControlValue("ACSESOverspeed", 0, overspeed ? 1 : 0);
-        me.rv.SetControlValue("ACSESAlarm", 0, overspeed ? 1 : 0);
-    });
-    acsesStop$(stop => {
-        me.rv.SetControlValue("ACSESStop", 0, stop ? 1 : 0);
-    });
-    trackSpeedMps$(speedMps => {
+        me.rv.SetControlValue("ACSESAlarm", 0, penalty || state.overspeed ? 1 : 0);
+        me.rv.SetControlValue("ACSESOverspeed", 0, state.overspeed ? 1 : 0);
+        me.rv.SetControlValue("ACSESStop", 0, state.brakes === acses.AcsesBrake.PositiveStop ? 1 : 0);
+
         let h, t, u;
-        if (speedMps === undefined) {
+        if (state.trackSpeedMps === undefined) {
             [h, t, u] = [-1, -1, -1];
         } else {
-            [[h, t, u]] = m.digits(Math.round(speedMps * c.mps.toMph), 3);
+            [[h, t, u]] = m.digits(Math.round(state.trackSpeedMps * c.mps.toMph), 3);
         }
         me.rv.SetControlValue("TrackSpeedHundreds", 0, h);
         me.rv.SetControlValue("TrackSpeedTens", 0, t);
@@ -407,33 +382,32 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("ACSESBeep", 0, cv);
     });
 
-    const isAnyAlarm = frp.liftN(
-            (aleAlarm, ascPenalty, acsesOverspeed) => aleAlarm || ascPenalty || acsesOverspeed,
-            frp.stepper(aleAlarm$, false),
-            frp.stepper(ascPenalty$, false),
-            frp.stepper(acsesOverspeed$, false)
-        ),
-        isAnyAlarm$ = frp.map(_ => frp.snapshot(isAnyAlarm))(me.createUpdateStream());
+    const isAnyAlarm$ = me.createUpdateStreamForBehavior(
+        frp.liftN(
+            (aleState, ascState, acsesState) =>
+                aleState.alarm || isAscPenalty(ascState) || isAcsesPenalty(acsesState) || acsesState.overspeed,
+            aleState,
+            ascState,
+            acsesState
+        )
+    );
     isAnyAlarm$(alarm => {
         me.rv.SetControlValue("AWSWarnCount", 0, alarm ? 1 : 0);
     });
 
     // Set up throttle, reverser, dynamic brake, and air brake wiring.
     const airBrakeChargeThreshold = 0.37, // 90 psi BP
-        aleBrake$ = frp.map((state: ale.AlerterState) => state.brakes)(ale$),
-        ascBrake$ = frp.map((state: asc.AscState) => state.brakes)(asc$),
-        acsesBrake$ = frp.map((state: acses.AcsesState) => state.brakes)(acses$),
         speedoMph$ = me.createGetCvStream("SpeedometerMPH", 0),
         speedoMph = frp.stepper(speedoMph$, 0),
         brakeCommand = frp.liftN(
-            (mc, aleBrake, ascBrake, acsesBrake): BrakeCommand => {
-                if (ascBrake === asc.AscBrake.Emergency || mc === ControllerRegion.EmergencyBrake) {
+            (mc, aleState, ascState, acsesState): BrakeCommand => {
+                if (ascState.brakes === asc.AscBrake.Emergency || mc === ControllerRegion.EmergencyBrake) {
                     return BrakeType.Emergency;
                 } else if (
-                    aleBrake === ale.AlerterBrake.Penalty ||
-                    ascBrake === asc.AscBrake.Penalty ||
-                    acsesBrake === acses.AcsesBrake.Penalty ||
-                    acsesBrake === acses.AcsesBrake.PositiveStop
+                    aleState.brakes === ale.AlerterBrake.Penalty ||
+                    ascState.brakes === asc.AscBrake.Penalty ||
+                    acsesState.brakes === acses.AcsesBrake.Penalty ||
+                    acsesState.brakes === acses.AcsesBrake.PositiveStop
                 ) {
                     return [BrakeType.Service, 1];
                 } else if (mc === ControllerRegion.Coast || mc[0] === ControllerRegion.Power) {
@@ -443,9 +417,9 @@ const me = new FrpEngine(() => {
                 }
             },
             masterController,
-            frp.stepper(aleBrake$, ale.AlerterBrake.None),
-            frp.stepper(ascBrake$, asc.AscBrake.None),
-            frp.stepper(acsesBrake$, acses.AcsesBrake.None)
+            aleState,
+            ascState,
+            acsesState
         ),
         brakesCanCharge = frp.liftN(
             (brakes, isCharging) => {
@@ -481,9 +455,8 @@ const me = new FrpEngine(() => {
             )
         ),
         brakeCommandAndEvents$ = frp.compose(
-            me.createUpdateStream(),
-            me.filterPlayerEngine<number>(),
-            frp.map(_ => frp.snapshot(brakeCommand)),
+            me.createUpdateStreamForBehavior(brakeCommand),
+            me.filterPlayerEngine<BrakeCommand>(),
             frp.merge(emergencyBrakeEvent$),
             frp.merge(autostartBrakeEvent$),
             frp.merge(chargeBrakes$),
@@ -527,11 +500,7 @@ const me = new FrpEngine(() => {
             masterController,
             emergencyBrake
         ),
-        throttle$ = frp.compose(
-            me.createUpdateStream(),
-            me.filterPlayerEngine<number>(),
-            frp.map(_ => frp.snapshot(throttleCommand))
-        ),
+        throttle$ = frp.compose(me.createUpdateStreamForBehavior(throttleCommand), me.filterPlayerEngine<number>()),
         // Blend dynamic and air braking.
         nMultipleUnits = () => Math.round(me.rv.GetConsistLength() / (85.5 * c.ft.toM)),
         dynamicBrake$ = frp.compose(
@@ -660,18 +629,25 @@ const me = new FrpEngine(() => {
     });
 
     // Interior lights.
-    const cabLight$ = frp.map((v: number) => v > 0.5)(me.createOnCvChangeStreamFor("Cablight", 0)),
-        cabLight = new rw.Light("Cablight");
+    const cabLight = new rw.Light("Cablight"),
+        cabLight$ = frp.compose(
+            me.createOnCvChangeStreamFor("Cablight", 0),
+            frp.map((v: number) => v > 0.5)
+        );
     cabLight$(on => cabLight.Activate(on));
     cabLight.Activate(false);
 
-    const passLight$ = frp.map((vc: VehicleCamera) => vc === VehicleCamera.Carriage)(me.createCameraStream()),
-        passLight = new rw.Light("RoomLight_PassView");
+    const passLight = new rw.Light("RoomLight_PassView"),
+        passLight$ = frp.compose(
+            me.createCameraStream(),
+            frp.map((vc: VehicleCamera) => vc === VehicleCamera.Carriage)
+        );
     passLight$(on => passLight.Activate(on));
     passLight.Activate(false);
 
     // Exterior lights.
-    const brakeLight = frp.liftN(
+    const brakeLight$ = me.createUpdateStreamForBehavior(
+        frp.liftN(
             (authority, speedMps, brakeCylPsi) => {
                 if (authority === VehicleAuthority.IsPlayer) {
                     if (brakeCylPsi <= 12) {
@@ -691,8 +667,8 @@ const me = new FrpEngine(() => {
             authority,
             trueSpeedMps,
             () => me.rv.GetControlValue("TrainBrakeCylinderPressurePSI", 0) as number
-        ),
-        brakeLight$ = frp.map(_ => frp.snapshot(brakeLight))(me.createUpdateStream());
+        )
+    );
     brakeLight$(status => {
         me.rv.ActivateNode("SL_green", status === BrakeLight.Green);
         me.rv.ActivateNode("SL_yellow", status === BrakeLight.Amber);
@@ -700,20 +676,22 @@ const me = new FrpEngine(() => {
     me.rv.ActivateNode("SL_blue", false);
 
     const isTrueStopped = () => frp.snapshot(trueSpeedMps) < c.stopSpeed,
-        leftDoorOpen = frp.liftN(
-            (authority, stopped, playerDoor) => (authority === VehicleAuthority.IsPlayer ? playerDoor : stopped),
-            authority,
-            isTrueStopped,
-            () => (me.rv.GetControlValue("DoorsOpenCloseLeft", 0) as number) > 0.5
+        leftDoorOpen$ = me.createUpdateStreamForBehavior(
+            frp.liftN(
+                (authority, stopped, playerDoor) => (authority === VehicleAuthority.IsPlayer ? playerDoor : stopped),
+                authority,
+                isTrueStopped,
+                () => (me.rv.GetControlValue("DoorsOpenCloseLeft", 0) as number) > 0.5
+            )
         ),
-        leftDoorOpen$ = frp.map(_ => frp.snapshot(leftDoorOpen))(me.createUpdateStream()),
-        rightDoorOpen = frp.liftN(
-            (authority, stopped, playerDoor) => (authority === VehicleAuthority.IsPlayer ? playerDoor : stopped),
-            authority,
-            isTrueStopped,
-            () => (me.rv.GetControlValue("DoorsOpenCloseRight", 0) as number) > 0.5
-        ),
-        rightDoorOpen$ = frp.map(_ => frp.snapshot(rightDoorOpen))(me.createUpdateStream());
+        rightDoorOpen$ = me.createUpdateStreamForBehavior(
+            frp.liftN(
+                (authority, stopped, playerDoor) => (authority === VehicleAuthority.IsPlayer ? playerDoor : stopped),
+                authority,
+                isTrueStopped,
+                () => (me.rv.GetControlValue("DoorsOpenCloseRight", 0) as number) > 0.5
+            )
+        );
     leftDoorOpen$(open => {
         me.rv.ActivateNode("SL_doors_L", open);
     });
@@ -734,6 +712,26 @@ const me = new FrpEngine(() => {
     me.activateUpdatesEveryFrame(true);
 });
 me.setup();
+
+function isAscPenalty(state: asc.AscState) {
+    switch (state.brakes) {
+        case asc.AscBrake.Penalty:
+        case asc.AscBrake.Emergency:
+            return true;
+        default:
+            return false;
+    }
+}
+
+function isAcsesPenalty(state: acses.AcsesState) {
+    switch (state.brakes) {
+        case acses.AcsesBrake.Penalty:
+        case acses.AcsesBrake.PositiveStop:
+            return true;
+        default:
+            return false;
+    }
+}
 
 function threeDigitDisplay(eventStream: frp.Stream<number>) {
     return frp.compose(

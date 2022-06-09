@@ -14,6 +14,7 @@ export enum AlerterBrake {
     None,
     Penalty,
 }
+export const initState: AlerterState = { brakes: AlerterBrake.None, alarm: false };
 /**
  * Represents the engineer's control inputs to the alerter.
  */

@@ -20,6 +20,7 @@ export enum AscBrake {
     Penalty,
     Emergency,
 }
+export const initState: AscState = { brakes: AscBrake.None };
 
 type AscAccum = AscMode.Normal | [event: OverspeedEvent, acknowledged: boolean] | AscMode.Emergency;
 type OverspeedEvent = { initSpeedMps: number };
@@ -73,8 +74,7 @@ export function create(
             isCutOut
         ),
         overspeed$ = frp.compose(
-            e.createUpdateStream(),
-            frp.map(_ => frp.snapshot(isOverspeed)),
+            e.createUpdateStreamForBehavior(isOverspeed),
             fsm(false),
             frp.filter(([from, to]) => !from && to),
             frp.map((_): OverspeedEvent => {
