@@ -16,6 +16,7 @@ export enum AcsesBrake {
     Penalty,
     PositiveStop,
 }
+export const initState: AcsesState = { brakes: AcsesBrake.None, overspeed: false, trackSpeedMps: undefined };
 
 type AcsesMode =
     | AcsesModeType.Normal

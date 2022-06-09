@@ -240,6 +240,7 @@ const me = new FrpEngine(() => {
     ascPenalty$(penalty => {
         me.rv.SetControlValue("PenaltyIndicator", 0, penalty ? 1 : 0);
         me.rv.SetControlValue("Overspeed", 0, penalty ? 1 : 0);
+        me.rv.SetControlValue("ATCAlarm", 0, penalty ? 1 : 0);
     });
 
     const acsesCutIn$ = createCutInStream("ACSESCutIn", 0),
@@ -272,7 +273,17 @@ const me = new FrpEngine(() => {
         })(acses$),
         acsesOverspeed$ = frp.map((state: acses.AcsesState) => state.overspeed)(acses$),
         acsesStop$ = frp.map((state: acses.AcsesState) => state.brakes === acses.AcsesBrake.PositiveStop)(acses$),
-        trackSpeedMps$ = frp.map((state: acses.AcsesState) => state.trackSpeedMps)(acses$);
+        trackSpeedMps$ = frp.map((state: acses.AcsesState) => state.trackSpeedMps)(acses$),
+        acsesBeep$ = frp.compose(
+            acses$,
+            fsm<acses.AcsesState>(acses.initState),
+            frp.filter(
+                ([from, to]) =>
+                    from.trackSpeedMps !== to.trackSpeedMps && to.trackSpeedMps !== undefined && !to.overspeed
+            ),
+            me.createEventStreamTimer(),
+            frp.map(onOff => (onOff ? 1 : 0))
+        );
     setAcsesStatus$(status => {
         me.rv.SetControlValue("ACSESStatus", 0, status);
     });
@@ -281,6 +292,7 @@ const me = new FrpEngine(() => {
     });
     acsesOverspeed$(overspeed => {
         me.rv.SetControlValue("ACSESOverspeed", 0, overspeed ? 1 : 0);
+        me.rv.SetControlValue("ACSESAlarm", 0, overspeed ? 1 : 0);
     });
     acsesStop$(stop => {
         me.rv.SetControlValue("ACSESStop", 0, stop ? 1 : 0);
@@ -296,15 +308,8 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("TrackSpeedTens", 0, t);
         me.rv.SetControlValue("TrackSpeedUnits", 0, u);
     });
-
-    const isAscOrAcsesOverspeed = frp.liftN(
-            (ascPenalty, acsesOverspeed) => ascPenalty || acsesOverspeed,
-            frp.stepper(ascPenalty$, false),
-            frp.stepper(acsesOverspeed$, false)
-        ),
-        isAscOrAcsesOverspeed$ = frp.map(_ => frp.snapshot(isAscOrAcsesOverspeed))(me.createUpdateStream());
-    isAscOrAcsesOverspeed$(overspeed => {
-        me.rv.SetControlValue("ATCAlarm", 0, overspeed ? 1 : 0);
+    acsesBeep$(cv => {
+        me.rv.SetControlValue("ACSESBeep", 0, cv);
     });
 
     const isAnyAlarm = frp.liftN(
