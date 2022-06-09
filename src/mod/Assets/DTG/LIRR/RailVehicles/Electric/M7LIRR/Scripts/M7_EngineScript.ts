@@ -8,7 +8,7 @@ import * as c from "../../../../../../../../lib/constants";
 import * as frp from "../../../../../../../../lib/frp";
 import { FrpEngine } from "../../../../../../../../lib/frp-engine";
 import { debug, fsm, rejectUndefined } from "../../../../../../../../lib/frp-extra";
-import { VehicleAuthority, VehicleCamera } from "../../../../../../../../lib/frp-vehicle";
+import { ControlValueChange, VehicleAuthority, VehicleCamera } from "../../../../../../../../lib/frp-vehicle";
 import * as m from "../../../../../../../../lib/math";
 import * as rw from "../../../../../../../../lib/railworks";
 
@@ -48,10 +48,6 @@ enum BrakeLight {
 }
 
 const me = new FrpEngine(() => {
-    function forPlayerEngine<T>(): (eventStream: frp.Stream<T>) => frp.Stream<T> {
-        return frp.filter((_: T) => me.eng.GetIsEngineWithKey());
-    }
-
     function createCutInStream(name: string, index: number) {
         return frp.compose(
             me.createOnCvChangeStreamFor(name, index),
@@ -113,35 +109,36 @@ const me = new FrpEngine(() => {
         brakePipePsi = frp.stepper(brakePipePsi$, 0);
 
     // Lock controls as necessary for the startup sequence.
-    const lockMasterKeyOn$ = frp.compose(
-            me.createUpdateStream(),
-            frp.filter((_: number) => frp.snapshot(reverser) !== Reverser.KeyOut)
+    const lockMasterKey$ = frp.compose(
+            me.createGetCvAndOnCvChangeStreamFor("MasterKey", 0),
+            frp.map((cv: number) => {
+                return frp.snapshot(reverser) !== Reverser.KeyOut ? 1 : cv;
+            })
         ),
-        lockReverserKeyOut$ = frp.compose(
-            me.createUpdateStream(),
-            frp.filter((_: number) => !frp.snapshot(masterKey))
+        lockReverser$ = frp.compose(
+            me.createGetCvAndOnCvChangeStreamFor("UserVirtualReverser", 0),
+            frp.map((cv: number) => {
+                if (!frp.snapshot(masterKey)) {
+                    return 3;
+                } else if (frp.snapshot(masterController) !== ControllerRegion.EmergencyBrake) {
+                    return Math.min(cv, 2);
+                } else {
+                    return cv;
+                }
+            })
         ),
-        lockReverserOutOfEmergency$ = frp.compose(
-            me.createUpdateStream(),
-            frp.filter((_: number) => frp.snapshot(masterController) !== ControllerRegion.EmergencyBrake),
-            frp.map(_ => me.rv.GetControlValue("UserVirtualReverser", 0)),
-            rejectUndefined()
-        ),
-        lockMasterControllerKeyOut = frp.compose(
-            me.createUpdateStream(),
-            frp.filter((_: number) => frp.snapshot(reverser) === Reverser.KeyOut)
+        lockMasterController$ = frp.compose(
+            me.createGetCvAndOnCvChangeStreamFor("ThrottleAndBrake", 0),
+            frp.map((cv: number) => (frp.snapshot(reverser) === Reverser.KeyOut ? -1 : cv))
         );
-    lockMasterKeyOn$(_ => {
-        me.rv.SetControlValue("MasterKey", 0, 1);
+    lockMasterKey$(cv => {
+        me.rv.SetControlValue("MasterKey", 0, cv);
     });
-    lockReverserKeyOut$(_ => {
-        me.rv.SetControlValue("UserVirtualReverser", 0, 3);
+    lockReverser$(cv => {
+        me.rv.SetControlValue("UserVirtualReverser", 0, cv);
     });
-    lockReverserOutOfEmergency$(cv => {
-        me.rv.SetControlValue("UserVirtualReverser", 0, Math.min(cv, 2));
-    });
-    lockMasterControllerKeyOut(_ => {
-        me.rv.SetControlValue("ThrottleAndBrake", 0, -1);
+    lockMasterController$(cv => {
+        me.rv.SetControlValue("ThrottleAndBrake", 0, cv);
     });
 
     // Configure and initialize safety systems.
@@ -380,7 +377,7 @@ const me = new FrpEngine(() => {
         ),
         chargeBrakes$ = frp.compose(
             me.createUpdateStream(),
-            forPlayerEngine<number>(),
+            me.filterPlayerEngine<number>(),
             fsm(0),
             frp.map(([from, to]) => {
                 const chargePerSecond = 0.063; // 10 seconds to recharge to service braking
@@ -391,7 +388,7 @@ const me = new FrpEngine(() => {
         ),
         brakeCommandAndEvents$ = frp.compose(
             me.createUpdateStream(),
-            forPlayerEngine<number>(),
+            me.filterPlayerEngine<number>(),
             frp.map(_ => frp.snapshot(brakeCommand)),
             frp.merge(emergencyPullCord$),
             frp.merge(startupOn$),
@@ -438,14 +435,14 @@ const me = new FrpEngine(() => {
         ),
         throttle$ = frp.compose(
             me.createUpdateStream(),
-            forPlayerEngine<number>(),
+            me.filterPlayerEngine<number>(),
             frp.map(_ => frp.snapshot(throttleCommand))
         ),
         // Blend dynamic and air braking.
         nMultipleUnits = () => Math.round(me.rv.GetConsistLength() / (85.5 * c.ft.toM)),
         dynamicBrake$ = frp.compose(
             me.createUpdateStream(),
-            forPlayerEngine<number>(),
+            me.filterPlayerEngine<number>(),
             fsm(0),
             frp.map(([from, to]): [dt: number, target: number] => {
                 const brakes = frp.snapshot(brakeCommand);
@@ -547,11 +544,11 @@ const me = new FrpEngine(() => {
     });
 
     // Set indicators on the driving display.
-    const speedoMphDigits$ = frp.compose(speedoMph$, forPlayerEngine<number>(), threeDigitDisplay),
-        brakePipePsiDigits$ = frp.compose(brakePipePsi$, forPlayerEngine<number>(), threeDigitDisplay),
+    const speedoMphDigits$ = frp.compose(speedoMph$, me.filterPlayerEngine<number>(), threeDigitDisplay),
+        brakePipePsiDigits$ = frp.compose(brakePipePsi$, me.filterPlayerEngine<number>(), threeDigitDisplay),
         brakeCylinderPsiDigits$ = frp.compose(
             me.createGetCvStream("TrainBrakeCylinderPressurePSI", 0),
-            forPlayerEngine<number>(),
+            me.filterPlayerEngine<number>(),
             threeDigitDisplay
         );
     speedoMphDigits$(([digits, guide]) => {
@@ -639,7 +636,12 @@ const me = new FrpEngine(() => {
     });
 
     // Process OnControlValueChange events.
-    const onCvChange$ = me.createOnCvChangeStream();
+    const onCvChange$ = frp.compose(
+        me.createOnCvChangeStream(),
+        frp.reject<ControlValueChange>(
+            ([name]) => name === "MasterKey" || name === "UserVirtualReverser" || name === "ThrottleAndBrake"
+        )
+    );
     onCvChange$(([name, index, value]) => me.rv.SetControlValue(name, index, value));
 
     // Enable updates.
