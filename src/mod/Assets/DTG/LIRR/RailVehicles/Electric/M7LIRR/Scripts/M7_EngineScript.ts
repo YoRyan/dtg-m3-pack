@@ -12,6 +12,19 @@ import { ControlValueChange, VehicleAuthority, VehicleCamera } from "../../../..
 import * as m from "../../../../../../../../lib/math";
 import * as rw from "../../../../../../../../lib/railworks";
 
+enum ControlEvent {
+    Autostart,
+    Autostop,
+    EmergencyBrake,
+}
+
+enum InterlockAllows {
+    MasterKeyIn,
+    MasterKeyOutReverserNonKeyOut,
+    ReverserKeyOutMasterControllerNonEmergency,
+    MasterControllerEmergency,
+}
+
 type MasterController =
     | [ControllerRegion.Power, number]
     | ControllerRegion.Coast
@@ -29,6 +42,11 @@ enum Reverser {
     Forward,
     Neutral,
     Reverse,
+}
+
+enum MasterKey {
+    KeyIn,
+    KeyOut,
 }
 
 type BrakeCommand = BrakeType.None | [BrakeType.Service, number] | BrakeType.Emergency;
@@ -55,17 +73,85 @@ const me = new FrpEngine(() => {
         );
     }
 
-    // Define some useful streams and behaviors.
-    const authority$ = me.createAuthorityStream(),
+    // Basic controls, including the master controller/reverser/master key
+    // interlock.
+    const autostartEvent$ = frp.compose(
+            me.createOnCvChangeStreamFor("VirtualStartup", 0),
+            frp.filter((cv: number) => cv >= 1 || cv <= -1),
+            frp.map(cv => (cv > 0 ? ControlEvent.Autostart : ControlEvent.Autostop))
+        ),
+        emergencyPullCordEvent$ = frp.compose(
+            me.createOnCvChangeStreamFor("VirtualEmergencyBrake", 0),
+            frp.filter((cv: number) => cv >= 1),
+            frp.map(_ => ControlEvent.EmergencyBrake)
+        ),
+        authority$ = me.createAuthorityStream(),
         authority = frp.stepper(authority$, VehicleAuthority.IsPlayer),
         trueSpeedMps = () => me.rv.GetSpeed(),
-        masterKey$ = frp.compose(
-            me.createGetCvStream("MasterKey", 0),
-            frp.map((cv: number) => cv > 0.5)
+        interlockState$ = frp.compose(
+            me.createOnCvChangeStream(),
+            frp.merge<ControlEvent, ControlValueChange>(autostartEvent$),
+            frp.fold<InterlockAllows, ControlEvent | ControlValueChange>((accum, input) => {
+                switch (input) {
+                    case ControlEvent.Autostart:
+                        return InterlockAllows.MasterControllerEmergency;
+                    case ControlEvent.Autostop:
+                        return InterlockAllows.MasterKeyIn;
+                    case ControlEvent.EmergencyBrake:
+                        return accum;
+                    default:
+                }
+                const [name, , value] = input;
+                switch (accum) {
+                    case InterlockAllows.MasterKeyIn:
+                        if (name === "MasterKey" && value > 0.5) {
+                            return InterlockAllows.MasterKeyOutReverserNonKeyOut;
+                        }
+                        break;
+                    case InterlockAllows.MasterKeyOutReverserNonKeyOut:
+                        if (name === "MasterKey" && value < 0.5) {
+                            return InterlockAllows.MasterKeyIn;
+                        } else if (name === "UserVirtualReverser" && value < 2.5) {
+                            return InterlockAllows.ReverserKeyOutMasterControllerNonEmergency;
+                        }
+                        break;
+                    case InterlockAllows.ReverserKeyOutMasterControllerNonEmergency:
+                        if (name === "UserVirtualReverser" && value > 2.5) {
+                            return InterlockAllows.MasterKeyOutReverserNonKeyOut;
+                        } else if (name === "ThrottleAndBrake" && value > -0.95) {
+                            return InterlockAllows.MasterControllerEmergency;
+                        }
+                        break;
+                    case InterlockAllows.MasterControllerEmergency:
+                    default:
+                        if (name === "ThrottleAndBrake" && value < -0.95) {
+                            return InterlockAllows.ReverserKeyOutMasterControllerNonEmergency;
+                        }
+                        break;
+                }
+                return accum;
+            }, InterlockAllows.MasterKeyIn)
         ),
-        masterKey = frp.stepper(masterKey$, false),
+        interlockState = frp.stepper(interlockState$, InterlockAllows.MasterKeyIn);
+
+    const rwMasterController$ = frp.compose(
+            autostartEvent$,
+            frp.map((evt: ControlEvent) => (evt === ControlEvent.Autostart ? -0.9 : -1)),
+            frp.merge(me.createGetCvAndOnCvChangeStreamFor("ThrottleAndBrake", 0)),
+            frp.map((cv: number) => {
+                switch (frp.snapshot(interlockState)) {
+                    case InterlockAllows.MasterKeyIn:
+                    case InterlockAllows.MasterKeyOutReverserNonKeyOut:
+                        return -1;
+                    case InterlockAllows.ReverserKeyOutMasterControllerNonEmergency:
+                    case InterlockAllows.MasterControllerEmergency:
+                        return cv;
+                }
+            }),
+            frp.hub()
+        ),
         masterController$ = frp.compose(
-            me.createGetCvStream("ThrottleAndBrake", 0),
+            rwMasterController$,
             frp.map((cv: number): MasterController => {
                 if (cv < -0.9 - 0.05) {
                     return ControllerRegion.EmergencyBrake;
@@ -80,10 +166,29 @@ const me = new FrpEngine(() => {
                 }
             })
         ),
-        masterController = frp.stepper(masterController$, ControllerRegion.EmergencyBrake),
-        reverser$ = frp.compose(
-            me.createGetCvStream("UserVirtualReverser", 0),
+        masterController = frp.stepper(masterController$, ControllerRegion.EmergencyBrake);
+    rwMasterController$(cv => me.rv.SetControlValue("ThrottleAndBrake", 0, cv));
+
+    const rwReverser$ = frp.compose(
+            autostartEvent$,
+            frp.map((evt: ControlEvent) => (evt === ControlEvent.Autostart ? 1 : 3)),
+            frp.merge(me.createGetCvAndOnCvChangeStreamFor("UserVirtualReverser", 0)),
             frp.map((cv: number) => {
+                switch (frp.snapshot(interlockState)) {
+                    case InterlockAllows.MasterKeyIn:
+                        return 3;
+                    case InterlockAllows.MasterKeyOutReverserNonKeyOut:
+                    case InterlockAllows.ReverserKeyOutMasterControllerNonEmergency:
+                        return cv;
+                    case InterlockAllows.MasterControllerEmergency:
+                        return Math.min(cv, 2);
+                }
+            }),
+            frp.hub()
+        ),
+        reverser$ = frp.compose(
+            rwReverser$,
+            frp.map((cv: number): Reverser => {
                 if (cv < 0 + 0.5) {
                     return Reverser.Reverse;
                 } else if (cv < 1 + 0.5) {
@@ -94,8 +199,36 @@ const me = new FrpEngine(() => {
                     return Reverser.KeyOut;
                 }
             })
+        );
+    rwReverser$(cv => me.rv.SetControlValue("UserVirtualReverser", 0, cv));
+
+    const rwMasterKey$ = frp.compose(
+            autostartEvent$,
+            frp.map((evt: ControlEvent) => (evt === ControlEvent.Autostart ? 1 : 0)),
+            frp.merge(me.createGetCvAndOnCvChangeStreamFor("MasterKey", 0)),
+            frp.map((cv: number) => {
+                switch (frp.snapshot(interlockState)) {
+                    case InterlockAllows.MasterKeyIn:
+                    case InterlockAllows.MasterKeyOutReverserNonKeyOut:
+                        return cv;
+                    case InterlockAllows.ReverserKeyOutMasterControllerNonEmergency:
+                    case InterlockAllows.MasterControllerEmergency:
+                        return 1;
+                }
+            }),
+            frp.hub()
         ),
-        reverser = frp.stepper(reverser$, Reverser.KeyOut),
+        masterKey$ = frp.compose(
+            rwMasterKey$,
+            frp.map((cv: number): MasterKey => (cv > 0.5 ? MasterKey.KeyIn : MasterKey.KeyOut))
+        );
+    rwMasterKey$(cv => me.rv.SetControlValue("MasterKey", 0, cv));
+
+    const hasPower$ = frp.compose(
+            masterKey$,
+            frp.map((mk: MasterKey) => mk === MasterKey.KeyIn)
+        ),
+        hasPower = frp.stepper(hasPower$, false),
         acknowledge = () => (me.rv.GetControlValue("AWSReset", 0) as number) > 0.5,
         coastOrBrake = () => {
             const mc = frp.snapshot(masterController);
@@ -107,39 +240,6 @@ const me = new FrpEngine(() => {
         },
         brakePipePsi$ = me.createGetCvStream("AirBrakePipePressurePSI", 0),
         brakePipePsi = frp.stepper(brakePipePsi$, 0);
-
-    // Lock controls as necessary for the startup sequence.
-    const lockMasterKey$ = frp.compose(
-            me.createGetCvAndOnCvChangeStreamFor("MasterKey", 0),
-            frp.map((cv: number) => {
-                return frp.snapshot(reverser) !== Reverser.KeyOut ? 1 : cv;
-            })
-        ),
-        lockReverser$ = frp.compose(
-            me.createGetCvAndOnCvChangeStreamFor("UserVirtualReverser", 0),
-            frp.map((cv: number) => {
-                if (!frp.snapshot(masterKey)) {
-                    return 3;
-                } else if (frp.snapshot(masterController) !== ControllerRegion.EmergencyBrake) {
-                    return Math.min(cv, 2);
-                } else {
-                    return cv;
-                }
-            })
-        ),
-        lockMasterController$ = frp.compose(
-            me.createGetCvAndOnCvChangeStreamFor("ThrottleAndBrake", 0),
-            frp.map((cv: number) => (frp.snapshot(reverser) === Reverser.KeyOut ? -1 : cv))
-        );
-    lockMasterKey$(cv => {
-        me.rv.SetControlValue("MasterKey", 0, cv);
-    });
-    lockReverser$(cv => {
-        me.rv.SetControlValue("UserVirtualReverser", 0, cv);
-    });
-    lockMasterController$(cv => {
-        me.rv.SetControlValue("ThrottleAndBrake", 0, cv);
-    });
 
     // Configure and initialize safety systems.
     const cabSignal$ = frp.compose(
@@ -162,41 +262,41 @@ const me = new FrpEngine(() => {
                       }[aspect]
                     : 0,
             cabAspect,
-            masterKey
+            hasPower
         ),
         setSignalSpeed$ = frp.compose(
-            cabSignal$,
-            frp.merge<boolean, number>(masterKey$),
-            frp.map(_ => frp.snapshot(signalSpeedControl))
+            me.createUpdateStream(),
+            frp.map((_: number) => frp.snapshot(signalSpeedControl))
         );
     setSignalSpeed$(cv => me.rv.SetControlValue("SignalSpeedLimit", 0, cv));
 
     const aleCutIn$ = createCutInStream("ALECutIn", 0),
-        movingPastCoast$ = frp.compose(
+        aleInputCancelsPenalty$ = frp.compose(
             masterController$,
             fsm<MasterController>(ControllerRegion.Coast),
             frp.filter(
                 ([from, to]) => from !== to && (from === ControllerRegion.Coast || to === ControllerRegion.Coast)
-            )
+            ),
+            frp.map(_ => ale.AlerterInput.ActivityThatCancelsPenalty)
         ),
-        aleInputCancelsPenalty$ = frp.map(_ => ale.AlerterInput.ActivityThatCancelsPenalty)(movingPastCoast$),
-        isMaxBrakeOrEmergency = () => {
-            const mc = frp.snapshot(masterController);
-            return (
-                mc === ControllerRegion.EmergencyBrake ||
-                (mc !== ControllerRegion.Coast && mc[0] === ControllerRegion.ServiceBrake && mc[1] >= 1)
-            );
-        },
-        horn = () => (me.rv.GetControlValue("Horn", 0) as number) > 0.5,
+        aleActivity = frp.liftN(
+            (acknowledge, mc, horn) => {
+                const maxBrakeOrEmergency =
+                    mc === ControllerRegion.EmergencyBrake ||
+                    (mc !== ControllerRegion.Coast && mc[0] === ControllerRegion.ServiceBrake && mc[1] >= 1);
+                return acknowledge || horn || maxBrakeOrEmergency;
+            },
+            acknowledge,
+            masterController,
+            () => (me.rv.GetControlValue("Horn", 0) as number) > 0.5
+        ),
         aleInput$ = frp.compose(
             me.createUpdateStream(),
-            frp.filter(
-                (_: number) => frp.snapshot(isMaxBrakeOrEmergency) || frp.snapshot(acknowledge) || frp.snapshot(horn)
-            ),
+            frp.filter((_: number) => frp.snapshot(aleActivity)),
             frp.map(_ => ale.AlerterInput.Activity),
             frp.merge(aleInputCancelsPenalty$)
         ),
-        ale$ = frp.hub<ale.AlerterState>()(ale.create(me, aleInput$, aleCutIn$, masterKey)),
+        ale$ = frp.hub<ale.AlerterState>()(ale.create(me, aleInput$, aleCutIn$, hasPower)),
         aleAlarm$ = frp.map((state: ale.AlerterState) => state.alarm)(ale$);
     aleAlarm$(alarm => {
         me.rv.SetControlValue("AlerterIndicator", 0, alarm ? 1 : 0);
@@ -214,14 +314,13 @@ const me = new FrpEngine(() => {
                 }
             },
             ascCutIn,
-            masterKey
+            hasPower
         ),
         setAscStatus$ = frp.compose(
-            ascCutIn$,
-            frp.merge<boolean, boolean>(masterKey$),
-            frp.map(_ => frp.snapshot(ascStatus))
+            me.createUpdateStream(),
+            frp.map((_: number) => frp.snapshot(ascStatus))
         ),
-        asc$ = frp.hub<asc.AscState>()(asc.create(me, cabAspect, acknowledge, coastOrBrake, ascCutIn$, masterKey)),
+        asc$ = frp.hub<asc.AscState>()(asc.create(me, cabAspect, acknowledge, coastOrBrake, ascCutIn$, hasPower)),
         ascPenalty$ = frp.map((state: asc.AscState) => {
             switch (state.brakes) {
                 case asc.AscBrake.Emergency:
@@ -251,14 +350,13 @@ const me = new FrpEngine(() => {
                 }
             },
             acsesCutIn,
-            masterKey
+            hasPower
         ),
         setAcsesStatus$ = frp.compose(
-            acsesCutIn$,
-            frp.merge<boolean, boolean>(masterKey$),
-            frp.map(_ => frp.snapshot(acsesStatus))
+            me.createUpdateStream(),
+            frp.map((_: number) => frp.snapshot(acsesStatus))
         ),
-        acses$ = frp.hub<acses.AcsesState>()(acses.create(me, acknowledge, coastOrBrake, acsesCutIn$, masterKey)),
+        acses$ = frp.hub<acses.AcsesState>()(acses.create(me, acknowledge, coastOrBrake, acsesCutIn$, hasPower)),
         acsesPenalty$ = frp.map((state: acses.AcsesState) => {
             switch (state.brakes) {
                 case acses.AcsesBrake.Penalty:
@@ -327,20 +425,6 @@ const me = new FrpEngine(() => {
         acsesBrake$ = frp.map((state: acses.AcsesState) => state.brakes)(acses$),
         speedoMph$ = me.createGetCvStream("SpeedometerMPH", 0),
         speedoMph = frp.stepper(speedoMph$, 0),
-        // Emergency brake push button with the backspace key, HUD, or pull cord.
-        emergencyPullCord$ = frp.compose(
-            me.createOnCvChangeStreamFor("VirtualEmergencyBrake", 0),
-            frp.filter((cv: number) => cv >= 1),
-            frp.map((_): BrakeEvent => BrakeType.Emergency)
-        ),
-        // Easy autostart with the startup control.
-        startupCommand$ = me.createOnCvChangeStreamFor("VirtualStartup", 0),
-        startupOn$ = frp.compose(
-            startupCommand$,
-            frp.filter((cv: number) => cv >= 1),
-            frp.map((_): BrakeEvent => BrakeType.Autostart)
-        ),
-        startupOff$ = frp.filter((cv: number) => cv <= -1)(startupCommand$),
         brakeCommand = frp.liftN(
             (mc, aleBrake, ascBrake, acsesBrake): BrakeCommand => {
                 if (ascBrake === asc.AscBrake.Emergency || mc === ControllerRegion.EmergencyBrake) {
@@ -386,12 +470,22 @@ const me = new FrpEngine(() => {
             frp.filter(charge => charge > 0),
             frp.map((charge): BrakeEvent => [BrakeType.Charge, charge])
         ),
+        emergencyBrakeEvent$ = frp.compose(
+            emergencyPullCordEvent$,
+            frp.map((_: number): BrakeCommand => BrakeType.Emergency)
+        ),
+        autostartBrakeEvent$ = frp.compose(
+            autostartEvent$,
+            frp.map<ControlEvent, BrakeEvent>(autostart =>
+                autostart === ControlEvent.Autostart ? BrakeType.Autostart : BrakeType.Emergency
+            )
+        ),
         brakeCommandAndEvents$ = frp.compose(
             me.createUpdateStream(),
             me.filterPlayerEngine<number>(),
             frp.map(_ => frp.snapshot(brakeCommand)),
-            frp.merge(emergencyPullCord$),
-            frp.merge(startupOn$),
+            frp.merge(emergencyBrakeEvent$),
+            frp.merge(autostartBrakeEvent$),
             frp.merge(chargeBrakes$),
             frp.hub()
         ),
@@ -485,7 +579,7 @@ const me = new FrpEngine(() => {
                     if (brakes === BrakeType.None) {
                         return 0;
                     } else if (brakes !== BrakeType.Autostart && brakes[0] === BrakeType.Service) {
-                        return airBrakeServiceRange(frp.snapshot(speedoMph) * c.mps.toMph, brakes[1]);
+                        return airBrakeServiceRange(frp.snapshot(speedoMph) * c.mph.toMps, brakes[1]);
                     } else {
                         return accum;
                     }
@@ -498,7 +592,9 @@ const me = new FrpEngine(() => {
             frp.map((applied: number) => applied <= airBrakeChargeThreshold),
             fsm(false)
         );
-    throttle$(t => me.rv.SetControlValue("Regulator", 0, t));
+    throttle$(t => {
+        me.rv.SetControlValue("Regulator", 0, t);
+    });
     reverser$(r => {
         let cv;
         switch (r) {
@@ -522,7 +618,7 @@ const me = new FrpEngine(() => {
     dynamicBrake$(d => {
         me.rv.SetControlValue("DynamicBrake", 0, d);
     });
-    emergencyPullCord$(_ => {
+    emergencyPullCordEvent$(_ => {
         me.rv.SetControlValue("VirtualEmergencyBrake", 0, 0); // Reset the pull cord if tripped.
     });
     startupState$(([from, to]) => {
@@ -531,16 +627,6 @@ const me = new FrpEngine(() => {
         } else if (from && !to) {
             me.rv.SetControlValue("VirtualStartup", 0, -1);
         }
-    });
-    startupOn$(_ => {
-        me.rv.SetControlValue("MasterKey", 0, 1);
-        me.rv.SetControlValue("UserVirtualReverser", 0, 1);
-        me.rv.SetControlValue("ThrottleAndBrake", 0, -0.9);
-    });
-    startupOff$(_ => {
-        me.rv.SetControlValue("MasterKey", 0, 0);
-        me.rv.SetControlValue("UserVirtualReverser", 0, 3);
-        me.rv.SetControlValue("ThrottleAndBrake", 0, -1);
     });
 
     // Set indicators on the driving display.
