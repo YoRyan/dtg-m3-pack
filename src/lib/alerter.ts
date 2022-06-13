@@ -56,34 +56,34 @@ export function create(
     cutIn: frp.Stream<boolean>,
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AlerterState> {
-    const isPlayerEngine = () => e.eng.GetIsEngineWithKey(),
-        cutInOut$ = frp.compose(
-            cutIn,
-            fsm(false),
-            frp.filter(([from, to]) => from !== to && frp.snapshot(isPlayerEngine))
-        );
+    const cutInOut$ = frp.compose(
+        cutIn,
+        fsm(false),
+        e.filterPlayerEngine(),
+        frp.filter(([from, to]) => from !== to)
+    );
     cutInOut$(([, to]) => {
         const msg = to ? "Enabled" : "Disabled";
         rw.ScenarioManager.ShowMessage("ALE Vigilance System", msg, rw.MessageBox.Alert);
     });
 
     const isCutOut = frp.liftN(
-            (cutIn, hasPower, isPlayerEngine) => !(cutIn && hasPower && isPlayerEngine),
-            frp.stepper(cutIn, false),
-            hasPower,
-            isPlayerEngine
-        ),
-        camera = frp.stepper(e.createCameraStream(), VehicleCamera.FrontCab),
-        isExteriorCamera = () => {
-            switch (frp.snapshot(camera)) {
-                case VehicleCamera.FrontCab:
-                case VehicleCamera.RearCab:
-                    return false;
-                default:
-                    return true;
-            }
-        },
-        accumStart: AlerterAccum = [AlerterMode.Countdown, countdownS];
+        (cutIn, hasPower, isPlayerEngine) => !(cutIn && hasPower && isPlayerEngine),
+        frp.stepper(cutIn, false),
+        hasPower,
+        () => e.eng.GetIsPlayer()
+    );
+    const camera = frp.stepper(e.createCameraStream(), VehicleCamera.FrontCab);
+    const isExteriorCamera = () => {
+        switch (frp.snapshot(camera)) {
+            case VehicleCamera.FrontCab:
+            case VehicleCamera.RearCab:
+                return false;
+            default:
+                return true;
+        }
+    };
+    const accumStart: AlerterAccum = [AlerterMode.Countdown, countdownS];
     return frp.compose(
         e.createUpdateStream(),
         fsm(e.e.GetSimulationTime()),
@@ -113,7 +113,7 @@ export function create(
             accumStart,
             isCutOut
         ),
-        frp.map((accum): AlerterState => {
+        frp.map(accum => {
             return {
                 brakes: accum === AlerterMode.Penalty ? AlerterBrake.Penalty : AlerterBrake.None,
                 alarm: accum === AlerterMode.Penalty || accum[0] === AlerterMode.Alarm,

@@ -49,38 +49,38 @@ export function create(
     cutIn: frp.Stream<boolean>,
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AscState> {
-    const isPlayerEngine = () => e.eng.GetIsEngineWithKey(),
-        cutInOut$ = frp.compose(
-            cutIn,
-            fsm(false),
-            frp.filter(([from, to]) => from !== to && frp.snapshot(isPlayerEngine))
-        );
+    const cutInOut$ = frp.compose(
+        cutIn,
+        fsm(false),
+        e.filterPlayerEngine(),
+        frp.filter(([from, to]) => from !== to)
+    );
     cutInOut$(([, to]) => {
         const msg = to ? "Enabled" : "Disabled";
         rw.ScenarioManager.ShowMessage("ASC Signal Speed Enforcement", msg, rw.MessageBox.Alert);
     });
 
     const isCutOut = frp.liftN(
-            (cutIn, hasPower, isPlayerEngine) => !(cutIn && hasPower && isPlayerEngine),
-            frp.stepper(cutIn, false),
-            hasPower,
-            isPlayerEngine
-        ),
-        aSpeedMps = () => Math.abs(e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps,
-        isOverspeed = frp.liftN(
-            (speedMps, cabAspect, cutOut) => !cutOut && speedMps > toOverspeedSetpointMps(cabAspect),
-            aSpeedMps,
-            cabAspect,
-            isCutOut
-        ),
-        overspeed$ = frp.compose(
-            e.createUpdateStreamForBehavior(isOverspeed),
-            fsm(false),
-            frp.filter(([from, to]) => !from && to),
-            frp.map((_): OverspeedEvent => {
-                return { initSpeedMps: frp.snapshot(aSpeedMps) };
-            })
-        );
+        (cutIn, hasPower, isPlayerEngine) => !(cutIn && hasPower && isPlayerEngine),
+        frp.stepper(cutIn, false),
+        hasPower,
+        () => e.eng.GetIsEngineWithKey()
+    );
+    const aSpeedMps = () => Math.abs(e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps;
+    const isOverspeed = frp.liftN(
+        (speedMps, cabAspect, cutOut) => !cutOut && speedMps > toOverspeedSetpointMps(cabAspect),
+        aSpeedMps,
+        cabAspect,
+        isCutOut
+    );
+    const overspeed$ = frp.compose(
+        e.createUpdateStreamForBehavior(isOverspeed),
+        fsm(false),
+        frp.filter(([from, to]) => !from && to),
+        frp.map((_): OverspeedEvent => {
+            return { initSpeedMps: frp.snapshot(aSpeedMps) };
+        })
+    );
     return frp.compose(
         e.createUpdateStream(),
         frp.merge(overspeed$),
@@ -94,8 +94,8 @@ export function create(
                     return [value as OverspeedEvent, false];
                 } else if (accum === AscMode.Emergency) {
                     // Emergency braking; stay until the train has stopped.
-                    const ack = frp.snapshot(acknowledge),
-                        stopped = frp.snapshot(aSpeedMps) < c.stopSpeed;
+                    const ack = frp.snapshot(acknowledge);
+                    const stopped = frp.snapshot(aSpeedMps) < c.stopSpeed;
                     return ack && stopped ? AscMode.Normal : AscMode.Emergency;
                 } else if (!accum[1]) {
                     // Penalty braking, not acknowledged; we need to wait for
@@ -153,9 +153,9 @@ function toUnderspeedSetpointMps(aspect: cs.LirrAspect) {
 }
 
 function toBrakeAssuranceRateMphS(aspect: cs.LirrAspect, initSpeedMps: number): number | undefined {
-    const speedMph = initSpeedMps * c.mps.toMph,
-        oneThree = -1.3 * c.mph.toMps,
-        oneSeven = -1.7 * c.mph.toMps;
+    const speedMph = initSpeedMps * c.mps.toMph;
+    const oneThree = -1.3 * c.mph.toMps;
+    const oneSeven = -1.7 * c.mph.toMps;
     if (aspect === cs.LirrAspect.Speed15) {
         return undefined;
     } else if (aspect === cs.LirrAspect.Speed30) {

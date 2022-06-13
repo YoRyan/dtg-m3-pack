@@ -7,7 +7,7 @@ import * as cs from "./cabsignals";
 import * as c from "./constants";
 import * as frp from "./frp";
 import { FrpEngine } from "./frp-engine";
-import { debug, foldWithResetBehavior, fsm, rejectUndefined } from "./frp-extra";
+import { foldWithResetBehavior, fsm, rejectUndefined } from "./frp-extra";
 import * as rw from "./railworks";
 
 export type AcsesState = { brakes: AcsesBrake; overspeed: boolean; trackSpeedMps: number | undefined };
@@ -49,12 +49,12 @@ type SpeedPost = { type: rw.SpeedLimitType; speedMps: number };
 type TwoSidedSpeedPost = { before: SpeedPost | undefined; after: SpeedPost | undefined };
 type Signal = { proState: rw.ProSignalState };
 
-const alertMarginMps = 3 * c.mph.toMps,
-    penaltyMarginMps = 6 * c.mph.toMps,
-    alertCountdownS = 6,
-    penaltyCurveMps2 = -2 * c.mph.toMps,
-    iterateStepM = 0.01,
-    hugeSpeed = 999;
+const alertMarginMps = 3 * c.mph.toMps;
+const penaltyMarginMps = 6 * c.mph.toMps;
+const alertCountdownS = 6;
+const penaltyCurveMps2 = -2 * c.mph.toMps;
+const iterateStepM = 0.01;
+const hugeSpeed = 999;
 
 /**
  * Create a new ACSES instance.
@@ -74,57 +74,61 @@ export function create(
     cutIn: frp.Stream<boolean>,
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AcsesState> {
-    const isPlayerEngine = () => e.eng.GetIsEngineWithKey(),
-        cutInOut$ = frp.compose(
-            cutIn,
-            fsm(false),
-            frp.filter(([from, to]) => from !== to && frp.snapshot(isPlayerEngine))
-        );
+    const cutInOut$ = frp.compose(
+        cutIn,
+        fsm(false),
+        e.filterPlayerEngine(),
+        frp.filter(([from, to]) => from !== to)
+    );
     cutInOut$(([, to]) => {
         const msg = to ? "Enabled" : "Disabled";
         rw.ScenarioManager.ShowMessage("ACSES Track Speed Enforcement", msg, rw.MessageBox.Alert);
     });
 
     const isCutOut = frp.liftN(
-            (cutIn, hasPower, isPlayerEngine) => !(cutIn && hasPower && isPlayerEngine),
-            frp.stepper(cutIn, false),
-            hasPower,
-            isPlayerEngine
-        ),
-        pts$ = frp.compose(
-            e.createOnCustomSignalMessageStream(),
-            frp.map(msg => cs.toPositiveStopDistanceM(msg)),
-            rejectUndefined<number | false>()
-        ),
-        pts = frp.stepper(pts$, false),
-        speedMps = () => (e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps,
-        speedPostIndex$ = frp.compose(
-            e.createUpdateStream(),
-            frp.reject(_ => frp.snapshot(isCutOut)),
-            createSpeedPostsStream(e),
-            indexObjectsSensedByDistance<SpeedPost>(isCutOut),
-            frp.hub()
-        ),
-        speedPostIndex = frp.stepper(speedPostIndex$, new Map<number, Sensed<SpeedPost>>()),
-        signalIndex$ = frp.compose(
-            e.createUpdateStream(),
-            frp.reject(_ => frp.snapshot(isCutOut)),
-            createSignalStream(e),
-            indexObjectsSensedByDistance<Signal>(isCutOut)
-        ),
-        signalIndex = frp.stepper(signalIndex$, new Map<number, Sensed<Signal>>()),
-        trackSpeedMps$ = createTrackSpeedStream(
-            () => e.rv.GetCurrentSpeedLimit()[0],
-            () => e.rv.GetConsistLength(),
-            isCutOut
-        )(speedPostIndex$),
-        trackSpeedMps = frp.stepper(trackSpeedMps$, hugeSpeed);
+        (cutIn, hasPower, isPlayerEngine) => !(cutIn && hasPower && isPlayerEngine),
+        frp.stepper(cutIn, false),
+        hasPower,
+        () => e.eng.GetIsEngineWithKey()
+    );
+    const speedMps = () => (e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps;
+
+    const pts$ = frp.compose(
+        e.createOnCustomSignalMessageStream(),
+        frp.map(msg => cs.toPositiveStopDistanceM(msg)),
+        rejectUndefined()
+    );
+    const pts = frp.stepper(pts$, false);
+
+    const speedPostIndex$ = frp.compose(
+        e.createUpdateStream(),
+        frp.reject(_ => frp.snapshot(isCutOut)),
+        createSpeedPostsStream(e),
+        indexObjectsSensedByDistance(isCutOut),
+        frp.hub()
+    );
+    const trackSpeedMps$ = createTrackSpeedStream(
+        () => e.rv.GetCurrentSpeedLimit()[0],
+        () => e.rv.GetConsistLength(),
+        isCutOut
+    )(speedPostIndex$);
+    const speedPostIndex = frp.stepper(speedPostIndex$, new Map<number, Sensed<SpeedPost>>());
+    const trackSpeedMps = frp.stepper(trackSpeedMps$, hugeSpeed);
+
+    const signalIndex$ = frp.compose(
+        e.createUpdateStream(),
+        frp.reject(_ => frp.snapshot(isCutOut)),
+        createSignalStream(e),
+        indexObjectsSensedByDistance(isCutOut)
+    );
+    const signalIndex = frp.stepper(signalIndex$, new Map<number, Sensed<Signal>>());
+
     return frp.compose(
         e.createUpdateStream(),
         foldWithResetBehavior<AcsesAccum, number>(
             (accum, t) => {
-                const theSpeedMps = frp.snapshot(speedMps),
-                    thePts = frp.snapshot(pts);
+                const theSpeedMps = frp.snapshot(speedMps);
+                const thePts = frp.snapshot(pts);
                 let hazards: Hazard[] = [];
 
                 // Add advance speed limits.
@@ -149,13 +153,13 @@ export function create(
                 // Sort by penalty curve speed.
                 hazards.sort((a, b) => a.penaltyCurveMps - b.penaltyCurveMps);
 
-                const aSpeedMps = Math.abs(theSpeedMps),
-                    inForce = hazards[0],
-                    lowestTrackSpeedMps = hazards.reduce((previous, current) =>
-                        previous.trackSpeedMps !== undefined ? previous : current
-                    ).trackSpeedMps as number,
-                    isPositiveStop = inForce instanceof StopSignalHazard,
-                    isOverspeed = aSpeedMps > inForce.alertCurveMps;
+                const aSpeedMps = Math.abs(theSpeedMps);
+                const inForce = hazards[0];
+                const lowestTrackSpeedMps = hazards.reduce((previous, current) =>
+                    previous.trackSpeedMps !== undefined ? previous : current
+                ).trackSpeedMps as number;
+                const isPositiveStop = inForce instanceof StopSignalHazard;
+                const isOverspeed = aSpeedMps > inForce.alertCurveMps;
                 let mode: AcsesMode;
                 if (accum.mode === AcsesModeType.Penalty) {
                     mode = frp.snapshot(acknowledge) ? AcsesModeType.PenaltyAcknowledged : AcsesModeType.Penalty;
@@ -226,8 +230,8 @@ function createSpeedPostsStream(e: FrpEngine): (eventStream: frp.Stream<any>) =>
             eventStream,
             fsm(0),
             frp.map(([from, to]) => {
-                const speedMpS = e.rv.GetSpeed(), // Must be as precise as possible.
-                    traveledM = speedMpS * (to - from);
+                const speedMpS = e.rv.GetSpeed(); // Must be as precise as possible.
+                const traveledM = speedMpS * (to - from);
                 let posts: Sensed<SpeedPost>[] = [];
                 for (const [distanceM, post] of iterateSpeedLimitsBackward(e, nLimits)) {
                     posts.push([-distanceM, post]);
@@ -281,8 +285,8 @@ function createSignalStream(e: FrpEngine): (eventStream: frp.Stream<any>) => frp
             e.createUpdateStream(),
             fsm(0),
             frp.map(([from, to]) => {
-                const speedMpS = e.rv.GetSpeed(), // Must be as precise as possible.
-                    traveledM = speedMpS * (to - from);
+                const speedMpS = e.rv.GetSpeed(); // Must be as precise as possible.
+                const traveledM = speedMpS * (to - from);
                 let signals: Sensed<Signal>[] = [];
                 for (const [distanceM, signal] of iterateSignalsBackward(e, nSignals)) {
                     signals.push([-distanceM, signal]);
@@ -445,9 +449,9 @@ function indexObjectsSensedByDistance<T>(
             >(
                 (accum, reading) => {
                     const [traveledM, objects] = reading;
-                    let counter = accum.counter,
-                        sensed = new Map<number, Sensed<T>>(),
-                        passing = new Map<number, Sensed<T>>();
+                    let counter = accum.counter;
+                    let sensed = new Map<number, Sensed<T>>();
+                    let passing = new Map<number, Sensed<T>>();
                     for (const [distanceM, obj] of objects) {
                         // There's no continue in Lua 5.0, but we do have break...
                         while (true) {
@@ -457,8 +461,8 @@ function indexObjectsSensedByDistance<T>(
                                 if (sensed.has(id)) {
                                     return undefined;
                                 } else {
-                                    const inferredM = sensedDistanceM - traveledM,
-                                        differenceM = Math.abs(inferredM - distanceM);
+                                    const inferredM = sensedDistanceM - traveledM;
+                                    const differenceM = Math.abs(inferredM - distanceM);
                                     return differenceM > senseMarginM ? undefined : -differenceM;
                                 }
                             });
@@ -536,8 +540,8 @@ function indexObjectsSensedByDistance<T>(
  * @returns The highest-scoring key, if any.
  */
 function bestScoreOfMapEntries<K, V>(map: Map<K, V>, score: (key: K, value: V) => number | undefined): K | undefined {
-    let best: K | undefined = undefined,
-        bestScore: number | undefined = undefined;
+    let best: K | undefined = undefined;
+    let bestScore: number | undefined = undefined;
     for (const [k, v] of map) {
         const s = score(k, v);
         if (s !== undefined && (bestScore === undefined || s > bestScore)) {
@@ -593,8 +597,8 @@ class AdvanceLimitHazard implements Hazard {
     private violatedAtM: number | undefined = undefined;
 
     update(playerSpeedMps: number, sensed: Sensed<SpeedPost>) {
-        const [distanceM, post] = sensed,
-            aDistanceM = Math.abs(distanceM);
+        const [distanceM, post] = sensed;
+        const aDistanceM = Math.abs(distanceM);
 
         // Reveal this limit if the advance braking curve has been violated.
         let revealTrackSpeed: boolean;
