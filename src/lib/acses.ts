@@ -383,7 +383,7 @@ function createTrackSpeedStream(
                 }
                 return inferredSpeedMps;
             },
-            hugeSpeed,
+            0, // Should get instantly replaced by the game-calculated speed.
             reset
         )(indexStream);
     };
