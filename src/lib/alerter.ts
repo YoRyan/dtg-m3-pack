@@ -59,7 +59,7 @@ export function create(
     const isPlayerEngine = () => e.eng.GetIsEngineWithKey(),
         cutInOut$ = frp.compose(
             cutIn,
-            fsm<boolean>(false),
+            fsm(false),
             frp.filter(([from, to]) => from !== to && frp.snapshot(isPlayerEngine))
         );
     cutInOut$(([, to]) => {

@@ -77,7 +77,7 @@ export function create(
     const isPlayerEngine = () => e.eng.GetIsEngineWithKey(),
         cutInOut$ = frp.compose(
             cutIn,
-            fsm<boolean>(false),
+            fsm(false),
             frp.filter(([from, to]) => from !== to && frp.snapshot(isPlayerEngine))
         );
     cutInOut$(([, to]) => {
@@ -93,7 +93,7 @@ export function create(
         ),
         pts$ = frp.compose(
             e.createOnCustomSignalMessageStream(),
-            frp.map((msg: string) => cs.toPositiveStopDistanceM(msg)),
+            frp.map(msg => cs.toPositiveStopDistanceM(msg)),
             rejectUndefined<number | false>()
         ),
         pts = frp.stepper(pts$, false),
@@ -224,7 +224,7 @@ function createSpeedPostsStream(e: FrpEngine): (eventStream: frp.Stream<any>) =>
     return eventStream => {
         return frp.compose(
             eventStream,
-            fsm<number>(0),
+            fsm(0),
             frp.map(([from, to]) => {
                 const speedMpS = e.rv.GetSpeed(), // Must be as precise as possible.
                     traveledM = speedMpS * (to - from);
@@ -279,7 +279,7 @@ function createSignalStream(e: FrpEngine): (eventStream: frp.Stream<any>) => frp
     return eventStream => {
         return frp.compose(
             e.createUpdateStream(),
-            fsm<number>(0),
+            fsm(0),
             frp.map(([from, to]) => {
                 const speedMpS = e.rv.GetSpeed(), // Must be as precise as possible.
                     traveledM = speedMpS * (to - from);
