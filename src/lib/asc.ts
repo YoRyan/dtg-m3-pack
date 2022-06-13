@@ -29,6 +29,8 @@ enum AscMode {
     Emergency,
 }
 
+const popupS = 5;
+
 /**
  * Create a new ASC instance.
  * @param e The player's engine.
@@ -57,7 +59,7 @@ export function create(
     );
     cutInOut$(([, to]) => {
         const msg = to ? "Enabled" : "Disabled";
-        rw.ScenarioManager.ShowMessage("ASC Signal Speed Enforcement", msg, rw.MessageBox.Alert);
+        rw.ScenarioManager.ShowAlertMessageExt("ASC Signal Speed Enforcement", msg, popupS, "");
     });
 
     const isCutOut = frp.liftN(

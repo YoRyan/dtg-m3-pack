@@ -38,8 +38,9 @@ enum AlerterMode {
     Penalty,
 }
 
-const countdownS = 25,
-    alarmS = 15;
+const popupS = 5;
+const countdownS = 25;
+const alarmS = 15;
 
 /**
  * Create a new ALE instance.
@@ -64,7 +65,7 @@ export function create(
     );
     cutInOut$(([, to]) => {
         const msg = to ? "Enabled" : "Disabled";
-        rw.ScenarioManager.ShowMessage("ALE Vigilance System", msg, rw.MessageBox.Alert);
+        rw.ScenarioManager.ShowAlertMessageExt("ALE Vigilance System", msg, popupS, "");
     });
 
     const isCutOut = frp.liftN(

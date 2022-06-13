@@ -49,6 +49,7 @@ type SpeedPost = { type: rw.SpeedLimitType; speedMps: number };
 type TwoSidedSpeedPost = { before: SpeedPost | undefined; after: SpeedPost | undefined };
 type Signal = { proState: rw.ProSignalState };
 
+const popupS = 5;
 const alertMarginMps = 3 * c.mph.toMps;
 const penaltyMarginMps = 6 * c.mph.toMps;
 const alertCountdownS = 6;
@@ -82,7 +83,7 @@ export function create(
     );
     cutInOut$(([, to]) => {
         const msg = to ? "Enabled" : "Disabled";
-        rw.ScenarioManager.ShowMessage("ACSES Track Speed Enforcement", msg, rw.MessageBox.Alert);
+        rw.ScenarioManager.ShowAlertMessageExt("ACSES Track Speed Enforcement", msg, popupS, "");
     });
 
     const isCutOut = frp.liftN(
