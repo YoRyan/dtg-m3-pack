@@ -552,8 +552,8 @@ const me = new FrpEngine(() => {
         frp.map(([from, to]): [dt: number, target: number] => [to - from, frp.snapshot(dynamicBrakeCommand)]),
         // Simulate an exponential lag time for the dynamics to kick in.
         frp.fold<number, [dt: number, target: number]>((accum, input) => {
-            const [dt, target] = input,
-                maxChangePerS = ((1 - 0.25) / (1 - 0)) * (accum - 0) + 0.25;
+            const [dt, target] = input;
+            const maxChangePerS = ((1 - 0.25) / (1 - 0)) * (accum - 0) + 0.25;
             return target <= accum ? target : Math.min(accum + maxChangePerS * dt, target);
         }, 0),
         // Physics are calibrated for a 12-car train.
@@ -776,11 +776,11 @@ function threeDigitDisplay(eventStream: frp.Stream<number>) {
 }
 
 function airBrakeServiceRange(speedMps: number, application: number) {
-    const aSpeedMps = Math.abs(speedMps),
-        transitionMph: [start: number, end: number] = [1.341, 3.576], // from 3 to 8 mph
-        minService = 0.048, // 13 psi BC
-        maxService = 0.137, // 43 psi BC
-        floor = 0.035; // 8 psi BC
+    const aSpeedMps = Math.abs(speedMps);
+    const transitionMph: [start: number, end: number] = [1.341, 3.576]; // from 3 to 8 mph
+    const minService = 0.048; // 13 psi BC
+    const maxService = 0.137; // 43 psi BC
+    const floor = 0.035; // 8 psi BC
     let proportion;
     if (aSpeedMps < transitionMph[0]) {
         proportion = 1;
