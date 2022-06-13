@@ -72,6 +72,7 @@ const me = new FrpEngine(() => {
     const brakePipePsi$ = me.createGetCvStream("AirBrakePipePressurePSI", 0);
     const brakePipePsi = frp.stepper(brakePipePsi$, 0);
     const trueSpeedMps = () => me.rv.GetSpeed();
+    const isTrueStopped = () => frp.snapshot(trueSpeedMps) < c.stopSpeed;
     const authority = frp.stepper(me.createAuthorityStream(), VehicleAuthority.IsPlayer);
 
     // Event streams for the startup (Z) and emergency brake (Backspace)
