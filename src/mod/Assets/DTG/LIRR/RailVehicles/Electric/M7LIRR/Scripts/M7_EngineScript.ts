@@ -728,6 +728,13 @@ const me = new FrpEngine(() => {
         me.rv.ActivateNode("SL_doors_R", open);
     });
 
+    // Force the pantograph on to allow driving on routes with overhead electrification.
+    const setPantograph$ = frp.compose(me.createUpdateStream(), me.filterPlayerEngine<number>());
+    setPantograph$(_ => {
+        me.rv.SetControlValue("PantographControl", 0, 1);
+        me.rv.SetControlValue("VirtualPantographControl", 0, 0);
+    });
+
     // Process OnControlValueChange events.
     const onCvChange$ = frp.compose(
         me.createOnCvChangeStream(),
