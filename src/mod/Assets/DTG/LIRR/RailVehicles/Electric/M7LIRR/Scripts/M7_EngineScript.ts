@@ -5,6 +5,7 @@ import * as ale from "../../../../../../../../lib/alerter";
 import * as asc from "../../../../../../../../lib/asc";
 import * as cs from "../../../../../../../../lib/cabsignals";
 import * as c from "../../../../../../../../lib/constants";
+import * as dest from "../../../../../../../../lib/destinations";
 import * as frp from "../../../../../../../../lib/frp";
 import { FrpEngine } from "../../../../../../../../lib/frp-engine";
 import { debug, fsm, rejectUndefined } from "../../../../../../../../lib/frp-extra";
@@ -720,6 +721,47 @@ const me = new FrpEngine(() => {
     rightDoorOpen$(open => {
         me.rv.ActivateNode("SL_doors_R", open);
     });
+
+    // Destination board selector
+    const previousDest$ = frp.compose(
+        me.createGetCvStream("DecreaseDestination", 0),
+        frp.filter(cv => cv > 0.5),
+        frp.throttle(250)
+    );
+    const nextDest$ = frp.compose(
+        me.createGetCvStream("IncreaseDestination", 0),
+        frp.filter(cv => cv > 0.5),
+        frp.throttle(250)
+    );
+    dest.setup(
+        me,
+        [
+            "Atlantic Terminal Bklyn",
+            "Penn Station",
+            "Long Island City",
+            "Hunterspoint Ave.",
+            "Jamaica",
+            "Ronkonkoma",
+            "Huntington",
+            "Hempstead",
+            "Belmont Park",
+            "Babylon",
+            "Long Beach",
+            "Far Rockaway",
+            "West Hempstead",
+            "Port Washington",
+            "Great Neck",
+            "Hicksville",
+            "Mets-Willets Point",
+            "No Passengers",
+            "Valley Stream",
+            "Freeport",
+            "East Williston",
+            "Farmingdale",
+        ],
+        previousDest$,
+        nextDest$
+    );
 
     // Force the pantograph on to allow driving on routes with overhead electrification.
     const setPantograph$ = frp.compose(me.createUpdateStream(), me.filterPlayerEngine());
