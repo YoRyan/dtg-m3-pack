@@ -9,7 +9,7 @@ import * as dest from "../../../../../../../../lib/destinations";
 import * as frp from "../../../../../../../../lib/frp";
 import { FrpEngine } from "../../../../../../../../lib/frp-engine";
 import { debug, fsm, rejectUndefined } from "../../../../../../../../lib/frp-extra";
-import { ControlValueChange, VehicleAuthority, VehicleCamera } from "../../../../../../../../lib/frp-vehicle";
+import { VehicleAuthority, VehicleCamera } from "../../../../../../../../lib/frp-vehicle";
 import * as m from "../../../../../../../../lib/math";
 import * as rw from "../../../../../../../../lib/railworks";
 
@@ -258,7 +258,6 @@ const me = new FrpEngine(() => {
         rejectUndefined(),
         frp.map(pc => cs.toLirrAspect(pc))
     );
-    const cabAspect = frp.stepper(cabSignal$, cs.LirrAspect.Speed15);
     const setSignalSpeed$ = me.createUpdateStreamForBehavior(
         frp.liftN(
             (aspect, hasPower) =>
@@ -272,7 +271,7 @@ const me = new FrpEngine(() => {
                           [cs.LirrAspect.Speed80]: 80,
                       }[aspect]
                     : 0,
-            cabAspect,
+            frp.stepper(cabSignal$, cs.LirrAspect.Speed15),
             hasPower
         )
     );
@@ -325,16 +324,15 @@ const me = new FrpEngine(() => {
             hasPower
         )
     );
-    const asc$ = frp.compose(asc.create(me, cabAspect, acknowledge, coastOrBrake, ascCutIn$, hasPower), frp.hub());
+    const asc$ = frp.compose(asc.create(me, cabSignal$, acknowledge, coastOrBrake, ascCutIn$, hasPower), frp.hub());
     const ascState = frp.stepper(asc$, asc.initState);
     ascStatus$(status => {
         me.rv.SetControlValue("ATCStatus", 0, status);
     });
     asc$(state => {
-        const penalty = isAscPenalty(state);
-        me.rv.SetControlValue("PenaltyIndicator", 0, penalty ? 1 : 0);
-        me.rv.SetControlValue("Overspeed", 0, penalty ? 1 : 0);
-        me.rv.SetControlValue("ATCAlarm", 0, penalty ? 1 : 0);
+        me.rv.SetControlValue("PenaltyIndicator", 0, state.brakes !== asc.AscBrake.None ? 1 : 0);
+        me.rv.SetControlValue("Overspeed", 0, state.overspeed ? 1 : 0);
+        me.rv.SetControlValue("ATCAlarm", 0, state.alarm ? 1 : 0);
     });
 
     // ACSES track speed enforcement subsystem
@@ -367,7 +365,7 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("ACSESStatus", 0, status);
     });
     acses$(state => {
-        const penalty = isAcsesPenalty(state);
+        const penalty = state.brakes !== acses.AcsesBrake.None;
         me.rv.SetControlValue("ACSESPenalty", 0, penalty ? 1 : 0);
         me.rv.SetControlValue("ACSESAlarm", 0, penalty || state.overspeed ? 1 : 0);
         me.rv.SetControlValue("ACSESOverspeed", 0, state.overspeed ? 1 : 0);
@@ -391,7 +389,7 @@ const me = new FrpEngine(() => {
     const isAnyAlarm$ = me.createUpdateStreamForBehavior(
         frp.liftN(
             (aleState, ascState, acsesState) =>
-                aleState.alarm || isAscPenalty(ascState) || isAcsesPenalty(acsesState) || acsesState.overspeed,
+                aleState.alarm || ascState.alarm || acsesState.brakes !== acses.AcsesBrake.None || acsesState.overspeed,
             aleState,
             ascState,
             acsesState
@@ -412,6 +410,7 @@ const me = new FrpEngine(() => {
             } else if (
                 aleState.brakes === ale.AlerterBrake.Penalty ||
                 ascState.brakes === asc.AscBrake.Penalty ||
+                ascState.brakes === asc.AscBrake.MaxService ||
                 acsesState.brakes === acses.AcsesBrake.Penalty ||
                 acsesState.brakes === acses.AcsesBrake.PositiveStop
             ) {
@@ -787,26 +786,6 @@ function createCutInStream(e: FrpEngine, name: string, index: number) {
         e.createOnCvChangeStreamFor(name, index),
         frp.map(v => v > 0.5)
     );
-}
-
-function isAscPenalty(state: asc.AscState) {
-    switch (state.brakes) {
-        case asc.AscBrake.Penalty:
-        case asc.AscBrake.Emergency:
-            return true;
-        default:
-            return false;
-    }
-}
-
-function isAcsesPenalty(state: acses.AcsesState) {
-    switch (state.brakes) {
-        case acses.AcsesBrake.Penalty:
-        case acses.AcsesBrake.PositiveStop:
-            return true;
-        default:
-            return false;
-    }
 }
 
 function threeDigitDisplay(eventStream: frp.Stream<number>) {
