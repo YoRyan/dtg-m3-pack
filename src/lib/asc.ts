@@ -179,7 +179,7 @@ export function create(
                     // Clock update; move to another state if warranted, or add
                     // time to the stopwatch.
                     const [, stopwatchS, ack] = accum;
-                    if (ack && frp.snapshot(coastOrBrake)) {
+                    if (ack) {
                         return AscMode.Normal;
                     } else if (stopwatchS > downgradeEmergencyS) {
                         return AscMode.Emergency;
