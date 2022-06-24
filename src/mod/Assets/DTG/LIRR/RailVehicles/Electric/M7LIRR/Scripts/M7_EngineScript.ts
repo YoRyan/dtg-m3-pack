@@ -365,9 +365,8 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("ACSESStatus", 0, status);
     });
     acses$(state => {
-        const penalty = state.brakes !== acses.AcsesBrake.None;
-        me.rv.SetControlValue("ACSESPenalty", 0, penalty ? 1 : 0);
-        me.rv.SetControlValue("ACSESAlarm", 0, penalty || state.overspeed ? 1 : 0);
+        me.rv.SetControlValue("ACSESPenalty", 0, state.brakes !== acses.AcsesBrake.None ? 1 : 0);
+        me.rv.SetControlValue("ACSESAlarm", 0, state.alarm ? 1 : 0);
         me.rv.SetControlValue("ACSESOverspeed", 0, state.overspeed ? 1 : 0);
         me.rv.SetControlValue("ACSESStop", 0, state.brakes === acses.AcsesBrake.PositiveStop ? 1 : 0);
 
@@ -388,8 +387,7 @@ const me = new FrpEngine(() => {
     // Show the exclamation symbol on the HUD for any audible alarm.
     const isAnyAlarm$ = me.createUpdateStreamForBehavior(
         frp.liftN(
-            (aleState, ascState, acsesState) =>
-                aleState.alarm || ascState.alarm || acsesState.brakes !== acses.AcsesBrake.None || acsesState.overspeed,
+            (aleState, ascState, acsesState) => aleState.alarm || ascState.alarm || acsesState.alarm,
             aleState,
             ascState,
             acsesState

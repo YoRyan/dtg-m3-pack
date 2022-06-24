@@ -1,4 +1,5 @@
 /** @noSelfInFile */
+import * as c from "./constants";
 
 /**
  * A pulse code frequency combination in use on the Northeast Corridor.
@@ -128,7 +129,7 @@ export function toPositiveStopDistanceM(signalMessage: string): number | false |
     }
     const [, , stop] = string.find(signalMessage, "^sig7stop(%d+)$");
     if (stop !== undefined) {
-        return parseInt(stop as string);
+        return parseInt(stop as string) * c.ft.toM;
     }
 
     // Signals scripted by DTG for Amtrak and NJ Transit DLC's.
