@@ -690,6 +690,14 @@ const me = new FrpEngine(() => {
     emergencyBrake$(bie => {
         me.rv.SetControlValue("EmergencyBrakesIndicator", 0, bie ? 1 : 0);
     });
+    const doorsOpen$ = me.createUpdateStreamForBehavior(
+        frp.liftN(
+            (leftOpen, rightOpen) => leftOpen || rightOpen,
+            () => (me.rv.GetControlValue("DoorsOpenCloseLeft", 0) as number) > 0.5,
+            () => (me.rv.GetControlValue("DoorsOpenCloseRight", 0) as number) > 0.5
+        )
+    );
+    doorsOpen$(open => me.rv.SetControlValue("DoorsState", 0, open ? 1 : 0));
 
     // Screens on/off
     hasPower$(power => me.rv.SetControlValue("ScreensOff", 0, !power ? 1 : 0));
