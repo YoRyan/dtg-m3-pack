@@ -9,7 +9,7 @@ import * as dest from "../../../../../../../../lib/destinations";
 import * as frp from "../../../../../../../../lib/frp";
 import { FrpEngine } from "../../../../../../../../lib/frp-engine";
 import { debug, fsm, rejectUndefined } from "../../../../../../../../lib/frp-extra";
-import { VehicleAuthority, VehicleCamera } from "../../../../../../../../lib/frp-vehicle";
+import { VehicleAuthority, VehicleCamera, VehicleCouplings } from "../../../../../../../../lib/frp-vehicle";
 import * as m from "../../../../../../../../lib/math";
 import * as rw from "../../../../../../../../lib/railworks";
 
@@ -58,6 +58,12 @@ enum BrakeType {
     Emergency,
     Charge,
     Autostart,
+}
+
+enum HeadLight {
+    Off,
+    Dim,
+    Bright,
 }
 
 enum BrakeLight {
@@ -701,6 +707,84 @@ const me = new FrpEngine(() => {
 
     // Screens on/off
     hasPower$(power => me.rv.SetControlValue("ScreensOff", 0, !power ? 1 : 0));
+
+    // Coupling status
+    const couplings = frp.stepper<VehicleCouplings>(me.createCouplingsStream(), [false, false]);
+
+    // Headlights and marker lights
+    const dimLights = [new rw.Light("Forward_Headlight_3"), new rw.Light("Forward_Headlight_4")];
+    const brightLights = [new rw.Light("Forward_Headlight_1"), new rw.Light("Forward_Headlight_2")];
+    const markerLights = [new rw.Light("Backward_Taillight_1"), new rw.Light("Backward_Taillight_2")];
+    const headlights$ = frp.compose(
+        me.createAuthorityStream(),
+        frp.map(auth => {
+            if (auth === VehicleAuthority.IsPlayer && me.eng.GetIsEngineWithKey()) {
+                const cv = me.rv.GetControlValue("Headlights", 0) as number;
+                if (cv > 1.5) {
+                    return HeadLight.Bright;
+                } else if (cv > 0.5) {
+                    return HeadLight.Dim;
+                } else {
+                    return HeadLight.Off;
+                }
+            } else if (auth === VehicleAuthority.IsPlayer) {
+                return HeadLight.Off;
+            } else if (auth === VehicleAuthority.IsAiMovingForward) {
+                const [frontCoupled] = frp.snapshot(couplings);
+                return frontCoupled ? HeadLight.Off : HeadLight.Bright;
+            } else if (auth === VehicleAuthority.IsAiMovingBackward) {
+                return HeadLight.Off;
+            } else {
+                return HeadLight.Off;
+            }
+        })
+    );
+    headlights$(setting => {
+        for (const light of dimLights) {
+            light.Activate(setting === HeadLight.Dim || setting === HeadLight.Bright);
+        }
+        for (const light of brightLights) {
+            light.Activate(setting === HeadLight.Bright);
+        }
+    });
+    const markers$ = frp.compose(
+        me.createAuthorityStream(),
+        frp.map(auth => {
+            if (auth === VehicleAuthority.IsPlayer && me.eng.GetIsEngineWithKey()) {
+                const cv = me.rv.GetControlValue("Taillights", 0) as number;
+                return cv > 0.5;
+            } else if (auth === VehicleAuthority.IsPlayer) {
+                const [frontCoupled] = frp.snapshot(couplings);
+                return !frontCoupled;
+            } else if (auth === VehicleAuthority.IsAiMovingForward) {
+                return false;
+            } else if (auth === VehicleAuthority.IsAiMovingBackward) {
+                const [frontCoupled] = frp.snapshot(couplings);
+                return !frontCoupled;
+            } else {
+                return false;
+            }
+        })
+    );
+    markers$(setting => {
+        for (const light of markerLights) {
+            light.Activate(setting);
+        }
+    });
+
+    // Pantograph gate
+    const pantoGate$ = frp.compose(
+        me.createUpdateStream(),
+        fsm(0),
+        frp.map(([from, to]) => to - from),
+        frp.map(dt => {
+            const [frontCoupled] = frp.snapshot(couplings);
+            return frontCoupled ? dt : -dt;
+        })
+    );
+    pantoGate$(dt => {
+        me.rv.AddTime("ribbons", dt);
+    });
 
     // Cab dome light
     const cabLight = new rw.Light("Cablight");
