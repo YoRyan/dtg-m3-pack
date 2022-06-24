@@ -236,7 +236,8 @@ const me = new FrpEngine(() => {
     );
     const hasPower$ = frp.compose(
         masterKey$,
-        frp.map(mk => mk === MasterKey.KeyIn)
+        frp.map(mk => mk === MasterKey.KeyIn),
+        frp.hub()
     );
     const hasPower = frp.stepper(hasPower$, false);
 
@@ -759,6 +760,13 @@ const me = new FrpEngine(() => {
         previousDest$,
         nextDest$
     );
+
+    // Air conditioning sounds
+    hasPower$(power => {
+        me.rv.SetControlValue("FanSound", 0, power ? 1 : 0);
+        me.rv.SetControlValue("AuxMotors", 0, power ? 1 : 0);
+        me.rv.SetControlValue("CompressorState", 0, power ? 1 : 0);
+    });
 
     // Force the pantograph on to allow driving on routes with overhead electrification.
     const setPantograph$ = frp.compose(me.createUpdateStream(), me.filterPlayerEngine());
