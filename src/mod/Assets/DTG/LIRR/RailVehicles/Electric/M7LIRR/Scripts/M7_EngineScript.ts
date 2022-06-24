@@ -331,9 +331,10 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("ATCStatus", 0, status);
     });
     asc$(state => {
-        me.rv.SetControlValue("PenaltyIndicator", 0, state.brakes !== asc.AscBrake.None ? 1 : 0);
         me.rv.SetControlValue("Overspeed", 0, state.overspeed ? 1 : 0);
         me.rv.SetControlValue("ATCAlarm", 0, state.alarm ? 1 : 0);
+        me.rv.SetControlValue("BrakeAssurance", 0, state.brakeAssurance ? 1 : 0);
+        me.rv.SetControlValue("ATCForestall", 0, state.atcForestall ? 1 : 0);
     });
 
     // ACSES track speed enforcement subsystem
@@ -368,8 +369,15 @@ const me = new FrpEngine(() => {
     acses$(state => {
         me.rv.SetControlValue("ACSESPenalty", 0, state.brakes !== acses.AcsesBrake.None ? 1 : 0);
         me.rv.SetControlValue("ACSESAlarm", 0, state.alarm ? 1 : 0);
-        me.rv.SetControlValue("ACSESOverspeed", 0, state.overspeed ? 1 : 0);
         me.rv.SetControlValue("ACSESStop", 0, state.brakes === acses.AcsesBrake.PositiveStop ? 1 : 0);
+
+        let os;
+        if (state.overspeed) {
+            os = state.brakes === acses.AcsesBrake.None ? 1 : 2;
+        } else {
+            os = 0;
+        }
+        me.rv.SetControlValue("ACSESOverspeed", 0, os);
 
         let h, t, u;
         if (state.trackSpeedMps === undefined) {
@@ -380,9 +388,44 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("TrackSpeedHundreds", 0, h);
         me.rv.SetControlValue("TrackSpeedTens", 0, t);
         me.rv.SetControlValue("TrackSpeedUnits", 0, u);
+        me.rv.SetControlValue("TrackSpeedDashes", 0, 0);
     });
     acsesBeep$(cv => {
         me.rv.SetControlValue("ACSESBeep", 0, cv);
+    });
+
+    // Set the common penalty brake indicator.
+    const isAnyPenalty$ = me.createUpdateStreamForBehavior(
+        frp.liftN(
+            (aleState, ascState, acsesState) => {
+                switch (aleState.brakes) {
+                    case ale.AlerterBrake.Penalty:
+                        return true;
+                    default:
+                        break;
+                }
+                switch (ascState.brakes) {
+                    case asc.AscBrake.Penalty:
+                    case asc.AscBrake.MaxService:
+                        return true;
+                    default:
+                        break;
+                }
+                switch (acsesState.brakes) {
+                    case acses.AcsesBrake.Penalty:
+                        return true;
+                    default:
+                        break;
+                }
+                return false;
+            },
+            aleState,
+            ascState,
+            acsesState
+        )
+    );
+    isAnyPenalty$(penalty => {
+        me.rv.SetControlValue("PenaltyIndicator", 0, penalty ? 1 : 0);
     });
 
     // Show the exclamation symbol on the HUD for any audible alarm.
@@ -647,6 +690,9 @@ const me = new FrpEngine(() => {
     emergencyBrake$(bie => {
         me.rv.SetControlValue("EmergencyBrakesIndicator", 0, bie ? 1 : 0);
     });
+
+    // Screens on/off
+    hasPower$(power => me.rv.SetControlValue("ScreensOff", 0, !power ? 1 : 0));
 
     // Cab dome light
     const cabLight = new rw.Light("Cablight");
