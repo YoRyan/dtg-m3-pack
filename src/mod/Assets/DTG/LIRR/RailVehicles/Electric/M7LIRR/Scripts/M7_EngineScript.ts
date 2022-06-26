@@ -345,33 +345,49 @@ const me = new FrpEngine(() => {
 
     // ACSES track speed enforcement subsystem
     const acsesCutIn$ = createCutInStream(me, "ACSESCutIn", 0);
+    const acses$ = frp.compose(acses.create(me, acknowledge, coastOrBrake, acsesCutIn$, hasPower), frp.hub());
+    const acsesState = frp.stepper(acses$, acses.initState);
     const acsesStatus$ = me.createUpdateStreamForBehavior(
         frp.liftN(
-            (cutIn, hasPower) => {
+            (cutIn, hasPower, state) => {
                 if (hasPower) {
-                    return cutIn ? 2 : 0;
+                    if (cutIn) {
+                        return state.trackSpeed === acses.AcsesSpeed.Degraded ? 1 : 2;
+                    } else {
+                        return 0;
+                    }
                 } else {
                     return -1;
                 }
             },
             frp.stepper(acsesCutIn$, false),
-            hasPower
+            hasPower,
+            acsesState
         )
     );
-    const acses$ = frp.compose(acses.create(me, acknowledge, coastOrBrake, acsesCutIn$, hasPower), frp.hub());
-    const acsesState = frp.stepper(acses$, acses.initState);
     const acsesBeep$ = frp.compose(
         acses$,
         fsm(acses.initState),
-        frp.filter(
-            ([from, to]) => from.trackSpeedMps !== to.trackSpeedMps && to.trackSpeedMps !== undefined && !to.overspeed
-        ),
+        frp.filter(([from, to]) => {
+            if (from.trackSpeed === acses.AcsesSpeed.CutOut) {
+                return to.trackSpeed !== acses.AcsesSpeed.CutOut;
+            } else if (from.trackSpeed === acses.AcsesSpeed.Degraded) {
+                return to.trackSpeed !== acses.AcsesSpeed.CutOut && to.trackSpeed !== acses.AcsesSpeed.Degraded;
+            } else {
+                if (to.trackSpeed === acses.AcsesSpeed.CutOut) {
+                    return false;
+                } else if (to.trackSpeed === acses.AcsesSpeed.Degraded) {
+                    return true;
+                } else {
+                    const [, fromMps] = from.trackSpeed;
+                    const [, toMps] = to.trackSpeed;
+                    return fromMps !== toMps;
+                }
+            }
+        }),
         me.createEventStreamTimer(),
         frp.map(onOff => (onOff ? 1 : 0))
     );
-    acsesStatus$(status => {
-        me.rv.SetControlValue("ACSESStatus", 0, status);
-    });
     acses$(state => {
         me.rv.SetControlValue("ACSESPenalty", 0, state.brakes !== acses.AcsesBrake.None ? 1 : 0);
         me.rv.SetControlValue("ACSESAlarm", 0, state.alarm ? 1 : 0);
@@ -385,16 +401,23 @@ const me = new FrpEngine(() => {
         }
         me.rv.SetControlValue("ACSESOverspeed", 0, os);
 
-        let h, t, u;
-        if (state.trackSpeedMps === undefined) {
-            [h, t, u] = [-1, -1, -1];
+        let h, t, u, d;
+        if (state.trackSpeed === acses.AcsesSpeed.CutOut) {
+            [h, t, u, d] = [-1, -1, -1, 0];
+        } else if (state.trackSpeed === acses.AcsesSpeed.Degraded) {
+            [h, t, u, d] = [-1, -1, -1, 1];
         } else {
-            [[h, t, u]] = m.digits(Math.round(state.trackSpeedMps * c.mps.toMph), 3);
+            const [, speedMps] = state.trackSpeed;
+            [[h, t, u]] = m.digits(Math.round(speedMps * c.mps.toMph), 3);
+            d = 0;
         }
         me.rv.SetControlValue("TrackSpeedHundreds", 0, h);
         me.rv.SetControlValue("TrackSpeedTens", 0, t);
         me.rv.SetControlValue("TrackSpeedUnits", 0, u);
-        me.rv.SetControlValue("TrackSpeedDashes", 0, 0);
+        me.rv.SetControlValue("TrackSpeedDashes", 0, d);
+    });
+    acsesStatus$(status => {
+        me.rv.SetControlValue("ACSESStatus", 0, status);
     });
     acsesBeep$(cv => {
         me.rv.SetControlValue("ACSESBeep", 0, cv);

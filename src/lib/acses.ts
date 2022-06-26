@@ -10,24 +10,30 @@ import { FrpEngine } from "./frp-engine";
 import { foldWithResetBehavior, fsm, rejectUndefined } from "./frp-extra";
 import * as rw from "./railworks";
 
-export type AcsesState = { brakes: AcsesBrake; alarm: boolean; overspeed: boolean; trackSpeedMps: number | undefined };
+export type AcsesState = { brakes: AcsesBrake; alarm: boolean; overspeed: boolean; trackSpeed: AcsesTrack };
 export enum AcsesBrake {
     None,
     Penalty,
     PositiveStop,
 }
+export type AcsesTrack = AcsesSpeed.CutOut | AcsesSpeed.Degraded | [mode: AcsesSpeed.Enforcing, speedMps: number];
+export enum AcsesSpeed {
+    Enforcing,
+    CutOut,
+    Degraded,
+}
 export const initState: AcsesState = {
     brakes: AcsesBrake.None,
     alarm: false,
     overspeed: false,
-    trackSpeedMps: undefined,
+    trackSpeed: AcsesSpeed.CutOut,
 };
 
 type AcsesAccum = {
     acknowledged: Set<Hazard>;
     mode: AcsesMode;
     inForce: Hazard;
-    trackSpeedMps: number | undefined;
+    trackSpeed: AcsesTrack;
 };
 type AcsesMode =
     | AcsesModeType.Normal
@@ -119,13 +125,23 @@ export function create(
     const speedPostIndex = frp.stepper(speedPostIndex$, new Map<number, Sensed<SpeedPost>>());
     const signalIndex = frp.stepper(signalIndex$, new Map<number, Sensed<Signal>>());
 
-    const sortedHazards$ = frp.compose(
+    const trackSpeedMps$ = frp.compose(
         speedPostIndex$,
         createTrackSpeedStream(
             () => e.rv.GetCurrentSpeedLimit()[0],
             () => e.rv.GetConsistLength(),
             isCutOut
         ),
+        frp.hub()
+    );
+    const isDegraded$ = frp.compose(
+        trackSpeedMps$,
+        frp.map(speedMps => speedMps < 16 * c.mph.toMps)
+    );
+    const isDegraded = frp.stepper(isDegraded$, false);
+
+    const sortedHazards$ = frp.compose(
+        trackSpeedMps$,
         foldWithResetBehavior<{ advanceLimits: Map<number, AdvanceLimitHazard>; hazards: Hazard[] }, number>(
             (accum, trackSpeedMps) => {
                 const theSpeedMps = frp.snapshot(speedMps);
@@ -140,11 +156,14 @@ export function create(
                     hazard.update(theSpeedMps, sensed);
                     hazards.push(hazard);
                 }
-                // Add stop signals, if in positive stop mode.
-                for (const [id, [distanceM, signal]] of frp.snapshot(signalIndex)) {
-                    if (typeof thePts === "number" && signal.proState === rw.ProSignalState.Red) {
-                        const hazard = new StopSignalHazard(theSpeedMps, thePts, distanceM);
-                        hazards.push(hazard);
+                // Add stop signals, if we are not in degraded mode and a
+                // positive stop is imminent.
+                if (!frp.snapshot(isDegraded) && typeof thePts === "number") {
+                    for (const [id, [distanceM, signal]] of frp.snapshot(signalIndex)) {
+                        if (signal.proState === rw.ProSignalState.Red) {
+                            const hazard = new StopSignalHazard(theSpeedMps, thePts, distanceM);
+                            hazards.push(hazard);
+                        }
                     }
                 }
                 // Add current track speed limit.
@@ -254,14 +273,16 @@ export function create(
                     acknowledged,
                     mode,
                     inForce,
-                    trackSpeedMps: lowestTrackSpeed.trackSpeedMps as number,
+                    trackSpeed: frp.snapshot(isDegraded)
+                        ? AcsesSpeed.Degraded
+                        : [AcsesSpeed.Enforcing, lowestTrackSpeed.trackSpeedMps as number],
                 };
             },
             {
                 acknowledged: new Set<Hazard>(),
                 mode: AcsesModeType.Normal,
                 inForce: new TrackSpeedHazard(hugeSpeed),
-                trackSpeedMps: undefined,
+                trackSpeed: AcsesSpeed.CutOut,
             },
             isCutOut
         ),
@@ -290,7 +311,7 @@ export function create(
                 brakes,
                 alarm,
                 overspeed: aSpeedMps > accum.inForce.alertCurveMps,
-                trackSpeedMps: accum.trackSpeedMps,
+                trackSpeed: accum.trackSpeed,
             };
         })
     );
