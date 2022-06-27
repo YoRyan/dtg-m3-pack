@@ -86,10 +86,9 @@ export function create(
     };
     const accumStart: AlerterAccum = [AlerterMode.Countdown, countdownS];
     return frp.compose(
-        e.createUpdateStream(),
-        fsm(e.e.GetSimulationTime()),
-        frp.map<[number, number], AlerterUpdate>(([from, to]) => {
-            return { deltaS: to - from };
+        e.createUpdateDeltaStream(),
+        frp.map((dt): AlerterUpdate => {
+            return { deltaS: dt };
         }),
         frp.merge(input),
         foldWithResetBehavior<AlerterAccum, AlerterUpdate | AlerterInput>(

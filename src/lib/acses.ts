@@ -194,9 +194,7 @@ export function create(
     );
 
     return frp.compose(
-        e.createUpdateStream(),
-        fsm(0),
-        frp.map(([from, to]) => to - from),
+        e.createUpdateDeltaStream(),
         frp.map((dt): AcsesEvent => [AcsesEventType.Update, dt]),
         frp.merge(trackSpeedDowngrade$),
         foldWithResetBehavior<AcsesAccum, AcsesEvent>(
@@ -327,12 +325,11 @@ export function create(
 function createSpeedPostsStream(e: FrpEngine, stop: frp.Behavior<boolean>): frp.Stream<Reading<SpeedPost>> {
     const nLimits = 3;
     return frp.compose(
-        e.createUpdateStream(),
+        e.createUpdateDeltaStream(),
         frp.reject(_ => frp.snapshot(stop)),
-        fsm(0),
-        frp.map(([from, to]) => {
+        frp.map(dt => {
             const speedMpS = e.rv.GetSpeed(); // Must be as precise as possible.
-            const traveledM = speedMpS * (to - from);
+            const traveledM = speedMpS * dt;
             let posts: Sensed<SpeedPost>[] = [];
             for (const [distanceM, post] of iterateSpeedLimitsBackward(e, nLimits)) {
                 if (post.speedMps < hugeSpeed) {
@@ -389,12 +386,11 @@ function iterateSpeedLimits(
 function createSignalStream(e: FrpEngine, stop: frp.Behavior<boolean>): frp.Stream<Reading<Signal>> {
     const nSignals = 3;
     return frp.compose(
-        e.createUpdateStream(),
+        e.createUpdateDeltaStream(),
         frp.reject(_ => frp.snapshot(stop)),
-        fsm(0),
-        frp.map(([from, to]) => {
+        frp.map(dt => {
             const speedMpS = e.rv.GetSpeed(); // Must be as precise as possible.
-            const traveledM = speedMpS * (to - from);
+            const traveledM = speedMpS * dt;
             let signals: Sensed<Signal>[] = [];
             for (const [distanceM, signal] of iterateSignalsBackward(e, nSignals)) {
                 signals.push([-distanceM, signal]);

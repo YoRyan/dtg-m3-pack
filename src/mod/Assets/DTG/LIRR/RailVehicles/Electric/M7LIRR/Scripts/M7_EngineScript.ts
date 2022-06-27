@@ -401,9 +401,7 @@ const me = new FrpEngine(() => {
         frp.map(onOff => (onOff ? 1 : 0))
     );
     const acsesOverspeed$ = frp.compose(
-        me.createUpdateStream(),
-        fsm(0),
-        frp.map(([from, to]) => to - from),
+        me.createUpdateDeltaStream(),
         frp.fold<Overspeed, number>((accum, dt) => {
             const state = frp.snapshot(acsesState);
             let mode;
@@ -561,12 +559,11 @@ const me = new FrpEngine(() => {
         () => (me.rv.GetControlValue("Charging", 0) as number) > 0.5
     );
     const chargeBrakes$ = frp.compose(
-        me.createUpdateStream(),
+        me.createUpdateDeltaStream(),
         me.filterPlayerEngine(),
-        fsm(0),
-        frp.map(([from, to]) => {
+        frp.map(dt => {
             const chargePerSecond = 0.063; // 10 seconds to recharge to service braking
-            return frp.snapshot(brakesCanCharge) ? chargePerSecond * (to - from) : 0;
+            return frp.snapshot(brakesCanCharge) ? chargePerSecond * dt : 0;
         }),
         frp.filter(charge => charge > 0),
         frp.map((charge): BrakeEvent => [BrakeType.Charge, charge])
@@ -666,13 +663,11 @@ const me = new FrpEngine(() => {
         emergencyBrake
     );
     const dynamicBrake$ = frp.compose(
-        me.createUpdateStream(),
+        me.createUpdateDeltaStream(),
         me.filterPlayerEngine(),
-        fsm(0),
-        frp.map(([from, to]): [dt: number, target: number] => [to - from, frp.snapshot(dynamicBrakeCommand)]),
         // Simulate an exponential lag time for the dynamics to kick in.
-        frp.fold<number, [dt: number, target: number]>((accum, input) => {
-            const [dt, target] = input;
+        frp.fold<number, number>((accum, dt) => {
+            const target = frp.snapshot(dynamicBrakeCommand);
             const maxChangePerS = ((1 - 0.25) / (1 - 0)) * (accum - 0) + 0.25;
             return target <= accum ? target : Math.min(accum + maxChangePerS * dt, target);
         }, 0),
@@ -846,9 +841,7 @@ const me = new FrpEngine(() => {
 
     // Pantograph gate
     const pantoGate$ = frp.compose(
-        me.createUpdateStream(),
-        fsm(0),
-        frp.map(([from, to]) => to - from),
+        me.createUpdateDeltaStream(),
         frp.map(dt => {
             const [frontCoupled] = frp.snapshot(couplings);
             return frontCoupled ? dt : -dt;

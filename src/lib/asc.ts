@@ -127,9 +127,7 @@ export function create(
         frp.map((_): AscEvent => AscEventType.Downgrade)
     );
     return frp.compose(
-        e.createUpdateStream(),
-        fsm(0),
-        frp.map(([from, to]) => to - from),
+        e.createUpdateDeltaStream(),
         frp.map((dt): AscEvent => [AscEventType.Update, dt]),
         frp.merge(overspeed$),
         frp.merge(downgrade$),
