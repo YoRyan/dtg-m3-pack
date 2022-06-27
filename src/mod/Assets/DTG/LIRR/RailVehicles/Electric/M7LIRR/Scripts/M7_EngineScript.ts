@@ -369,7 +369,9 @@ const me = new FrpEngine(() => {
         acses$,
         fsm(acses.initState),
         frp.filter(([from, to]) => {
-            if (from.trackSpeed === acses.AcsesSpeed.CutOut) {
+            if (to.alarm) {
+                return false;
+            } else if (from.trackSpeed === acses.AcsesSpeed.CutOut) {
                 return to.trackSpeed !== acses.AcsesSpeed.CutOut;
             } else if (from.trackSpeed === acses.AcsesSpeed.Degraded) {
                 return to.trackSpeed !== acses.AcsesSpeed.CutOut && to.trackSpeed !== acses.AcsesSpeed.Degraded;
