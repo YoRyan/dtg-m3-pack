@@ -60,6 +60,16 @@ enum BrakeType {
     Autostart,
 }
 
+type Overspeed =
+    | OverspeedMode.None
+    | [mode: OverspeedMode.Warning, timerS: number]
+    | [mode: OverspeedMode.Penalty, timerS: number];
+enum OverspeedMode {
+    None,
+    Warning,
+    Penalty,
+}
+
 enum HeadLight {
     Off,
     Dim,
@@ -390,6 +400,29 @@ const me = new FrpEngine(() => {
         me.createEventStreamTimer(),
         frp.map(onOff => (onOff ? 1 : 0))
     );
+    const acsesOverspeed$ = frp.compose(
+        me.createUpdateStream(),
+        fsm(0),
+        frp.map(([from, to]) => to - from),
+        frp.fold<Overspeed, number>((accum, dt) => {
+            const state = frp.snapshot(acsesState);
+            let mode;
+            if (state.overspeed) {
+                mode = state.brakes === acses.AcsesBrake.None ? OverspeedMode.Warning : OverspeedMode.Penalty;
+            } else {
+                mode = OverspeedMode.None;
+            }
+
+            if (mode === OverspeedMode.None) {
+                return OverspeedMode.None;
+            } else if (accum === OverspeedMode.None) {
+                return [mode, 0];
+            } else {
+                const [, timerS] = accum;
+                return [mode, timerS + dt];
+            }
+        }, OverspeedMode.None)
+    );
     acses$(state => {
         me.rv.SetControlValue("ACSESPenalty", 0, state.brakes !== acses.AcsesBrake.None ? 1 : 0);
         me.rv.SetControlValue("ACSESAlarm", 0, state.alarm ? 1 : 0);
@@ -423,6 +456,20 @@ const me = new FrpEngine(() => {
     });
     acsesBeep$(cv => {
         me.rv.SetControlValue("ACSESBeep", 0, cv);
+    });
+    acsesOverspeed$(os => {
+        let cv;
+        if (os === OverspeedMode.None) {
+            cv = 0;
+        } else {
+            const [mode, timerS] = os;
+            if (timerS % 1 < 0.5) {
+                cv = mode === OverspeedMode.Warning ? 1 : 2;
+            } else {
+                cv = 0;
+            }
+        }
+        me.rv.SetControlValue("ACSESOverspeed", 0, cv);
     });
 
     // Set the common penalty brake indicator.
