@@ -50,6 +50,13 @@ enum MasterKey {
     KeyOut,
 }
 
+type CssAccum = { current: cs.LirrAspect; next: undefined | [aspect: cs.LirrAspect, inS: number] };
+type CssEvent = [event: CssEventType.Update, deltaS: number] | [event: CssEventType.Aspect, aspect: cs.LirrAspect];
+enum CssEventType {
+    Update,
+    Aspect,
+}
+
 type BrakeCommand = BrakeType.None | [BrakeType.Service, number] | BrakeType.Emergency;
 type BrakeEvent = BrakeType.Emergency | BrakeType.Autostart | [BrakeType.Charge, number];
 enum BrakeType {
@@ -273,7 +280,40 @@ const me = new FrpEngine(() => {
         me.createOnCustomSignalMessageStream(),
         frp.map(msg => cs.toPulseCode(msg)),
         rejectUndefined(),
-        frp.map(pc => cs.toLirrAspect(pc))
+        frp.map((pc): CssEvent => [CssEventType.Aspect, cs.toLirrAspect(pc)])
+    );
+    const cabSignalWithDelay$ = frp.compose(
+        me.createUpdateDeltaStream(),
+        frp.map((dt): CssEvent => [CssEventType.Update, dt]),
+        frp.merge(cabSignal$),
+        frp.fold<CssAccum, CssEvent>(
+            (accum, event) => {
+                const [e] = event;
+                if (e === CssEventType.Aspect) {
+                    const [, next] = event;
+                    if (accum.current === next) {
+                        return accum;
+                    } else {
+                        const isDowngrade =
+                            (next as number) < (accum.current as number) && next !== cs.LirrAspect.Speed15;
+                        const delayS = isDowngrade ? 1.8 : 3.2;
+                        return { current: accum.current, next: [next, delayS] };
+                    }
+                } else if (accum.next === undefined) {
+                    return accum;
+                } else {
+                    const [, dt] = event;
+                    const [next, inS] = accum.next;
+                    if (inS - dt <= 0) {
+                        return { current: next, next: undefined };
+                    } else {
+                        return { current: accum.current, next: [next, inS - dt] };
+                    }
+                }
+            },
+            { current: cs.LirrAspect.Speed15, next: undefined }
+        ),
+        frp.map(accum => accum.current)
     );
     const setSignalSpeed$ = me.createUpdateStreamForBehavior(
         frp.liftN(
@@ -288,7 +328,7 @@ const me = new FrpEngine(() => {
                           [cs.LirrAspect.Speed80]: 80,
                       }[aspect]
                     : 0,
-            frp.stepper(cabSignal$, cs.LirrAspect.Speed15),
+            frp.stepper(cabSignalWithDelay$, cs.LirrAspect.Speed15),
             hasPower
         )
     );
@@ -341,7 +381,10 @@ const me = new FrpEngine(() => {
             hasPower
         )
     );
-    const asc$ = frp.compose(asc.create(me, cabSignal$, acknowledge, coastOrBrake, ascCutIn$, hasPower), frp.hub());
+    const asc$ = frp.compose(
+        asc.create(me, cabSignalWithDelay$, acknowledge, coastOrBrake, ascCutIn$, hasPower),
+        frp.hub()
+    );
     const ascState = frp.stepper(asc$, asc.initState);
     ascStatus$(status => {
         me.rv.SetControlValue("ATCStatus", 0, status);
