@@ -604,12 +604,11 @@ const me = new FrpEngine(() => {
     const chargeBrakes$ = frp.compose(
         me.createUpdateDeltaStream(),
         me.filterPlayerEngine(),
-        frp.map(dt => {
+        frp.filter(_ => frp.snapshot(brakesCanCharge)),
+        frp.map((dt): BrakeEvent => {
             const chargePerSecond = 0.063; // 10 seconds to recharge to service braking
-            return frp.snapshot(brakesCanCharge) ? chargePerSecond * dt : 0;
-        }),
-        frp.filter(charge => charge > 0),
-        frp.map((charge): BrakeEvent => [BrakeType.Charge, charge])
+            return [BrakeType.Charge, chargePerSecond * dt];
+        })
     );
     const emergencyBrakeEvent$ = frp.compose(
         emergencyPullCordEvent$,
