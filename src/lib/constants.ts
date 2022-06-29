@@ -1,6 +1,6 @@
 /** @noSelfInFile */
 
-export const stopSpeed = 0.01;
+export const stopSpeed = 0.1;
 
 export const mph = {
     toMps: 0.44704,
