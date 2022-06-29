@@ -11,7 +11,7 @@ import * as cs from "./cabsignals";
 import * as c from "./constants";
 import * as frp from "./frp";
 import { FrpEngine } from "./frp-engine";
-import { foldWithResetBehavior, fsm } from "./frp-extra";
+import { fsm } from "./frp-extra";
 import * as rw from "./railworks";
 
 export type AscState = {
@@ -55,10 +55,12 @@ enum AscMode {
 
 type AscEvent =
     | [type: AscEventType.Update, deltaS: number]
+    | AscEventType.Reset
     | [type: AscEventType.Overspeed, initAspect: cs.LirrAspect, initSpeedMps: number]
     | AscEventType.Downgrade;
 enum AscEventType {
     Update,
+    Reset,
     Downgrade,
     Overspeed,
 }
@@ -90,8 +92,8 @@ export function create(
 ): frp.Stream<AscState> {
     const cutInOut$ = frp.compose(
         cutIn,
+        frp.filter(_ => frp.snapshot(e.isEngineWithKey)),
         fsm(false),
-        e.filterPlayerEngine(),
         frp.filter(([from, to]) => from !== to)
     );
     cutInOut$(([, to]) => {
@@ -99,23 +101,29 @@ export function create(
         rw.ScenarioManager.ShowAlertMessageExt("ASC Signal Speed Enforcement", msg, popupS, "");
     });
 
-    const isCutOut = frp.liftN(
-        (cutIn, hasPower, isPlayerEngine) => !(cutIn && hasPower && isPlayerEngine),
+    const isActive = frp.liftN(
+        (cutIn, hasPower, isPlayerEngine) => cutIn && hasPower && isPlayerEngine,
         frp.stepper(cutIn, false),
         hasPower,
-        () => e.eng.GetIsEngineWithKey()
+        e.isEngineWithKey
     );
+    const reset$ = frp.compose(
+        e.createUpdateStreamForBehavior(isActive, e.isEngineWithKey),
+        frp.filter(active => !active),
+        frp.map((_): AscEvent => AscEventType.Reset)
+    );
+
     const aSpeedMps = () => Math.abs(e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps;
     const accelMphS = () => e.rv.GetAcceleration() * c.mps.toMph;
     const theCabAspect = frp.stepper(cabAspect, cs.LirrAspect.Speed15);
     const isOverspeed = frp.liftN(
-        (speedMps, cabAspect, cutOut) => !cutOut && speedMps > toOverspeedSetpointMps(cabAspect),
+        (speedMps, cabAspect, active) => active && speedMps > toOverspeedSetpointMps(cabAspect),
         aSpeedMps,
         theCabAspect,
-        isCutOut
+        isActive
     );
     const overspeed$ = frp.compose(
-        e.createUpdateStreamForBehavior(isOverspeed),
+        e.createUpdateStreamForBehavior(isOverspeed, isActive),
         fsm(false),
         frp.filter(([from, to]) => !from && to),
         frp.map((_): AscEvent => [AscEventType.Overspeed, frp.snapshot(theCabAspect), frp.snapshot(aSpeedMps)])
@@ -127,110 +135,112 @@ export function create(
         frp.map((_): AscEvent => AscEventType.Downgrade)
     );
     return frp.compose(
-        e.createUpdateDeltaStream(),
+        e.createUpdateDeltaStream(isActive),
         frp.map((dt): AscEvent => [AscEventType.Update, dt]),
+        frp.merge(reset$),
         frp.merge(overspeed$),
         frp.merge(downgrade$),
-        foldWithResetBehavior<AscAccum, AscEvent>(
-            (accum, event) => {
-                const stopped = frp.snapshot(aSpeedMps) < c.stopSpeed;
+        frp.fold<AscAccum, AscEvent>((accum, event) => {
+            // Handle reset events (and other events while in the inactive state).
+            if (!frp.snapshot(isActive) || event === AscEventType.Reset) {
+                return AscMode.Normal;
+            }
 
-                if (accum === AscMode.Emergency) {
-                    // Emergency braking; stay until the train has stopped.
-                    return frp.snapshot(acknowledge) && frp.snapshot(coastOrBrake) && stopped
-                        ? AscMode.Normal
-                        : AscMode.Emergency;
+            const stopped = frp.snapshot(aSpeedMps) < c.stopSpeed;
+
+            if (accum === AscMode.Emergency) {
+                // Emergency braking; stay until the train has stopped.
+                return frp.snapshot(acknowledge) && frp.snapshot(coastOrBrake) && stopped
+                    ? AscMode.Normal
+                    : AscMode.Emergency;
+            }
+
+            if (accum === AscMode.Normal) {
+                if (event === AscEventType.Downgrade) {
+                    // Move to the downgrade state.
+                    return [AscMode.Downgrade, 0, false];
                 }
 
-                if (accum === AscMode.Normal) {
-                    if (event === AscEventType.Downgrade) {
-                        // Move to the downgrade state.
-                        return [AscMode.Downgrade, 0, false];
-                    }
+                const [e] = event;
+                if (e === AscEventType.Overspeed) {
+                    // Move to the overspeed state.
+                    const [, initAspect, initSpeedMps] = event;
+                    return [AscMode.Overspeed, initAspect, initSpeedMps, 0, false];
+                }
 
-                    const [e] = event;
-                    if (e === AscEventType.Overspeed) {
-                        // Move to the overspeed state.
-                        const [, initAspect, initSpeedMps] = event;
-                        return [AscMode.Overspeed, initAspect, initSpeedMps, 0, false];
-                    }
+                // Just a clock update; do nothing.
+                return accum;
+            }
 
-                    // Just a clock update; do nothing.
+            // Downgrade state
+            const [mode] = accum;
+            if (mode === AscMode.Downgrade) {
+                if (event === AscEventType.Downgrade) {
+                    // Already in the downgrade state; do nothing.
                     return accum;
                 }
 
-                // Downgrade state
-                const [mode] = accum;
-                if (mode === AscMode.Downgrade) {
-                    if (event === AscEventType.Downgrade) {
-                        // Already in the downgrade state; do nothing.
-                        return accum;
-                    }
+                const [e] = event;
+                if (e === AscEventType.Overspeed) {
+                    // An overspeed overrides the downgrade timer.
+                    const [, initAspect, initSpeedMps] = event;
+                    return [AscMode.Overspeed, initAspect, initSpeedMps, 0, false];
+                }
 
-                    const [e] = event;
-                    if (e === AscEventType.Overspeed) {
-                        // An overspeed overrides the downgrade timer.
-                        const [, initAspect, initSpeedMps] = event;
-                        return [AscMode.Overspeed, initAspect, initSpeedMps, 0, false];
-                    }
+                // Clock update; move to another state if warranted, or add
+                // time to the stopwatch.
+                const [, stopwatchS, ack] = accum;
+                if (ack) {
+                    return AscMode.Normal;
+                } else if (stopwatchS > downgradeEmergencyS) {
+                    return AscMode.Emergency;
+                }
+                const [, dt] = event;
+                return [AscMode.Downgrade, stopwatchS + dt, frp.snapshot(acknowledge) || ack];
+            }
 
-                    // Clock update; move to another state if warranted, or add
-                    // time to the stopwatch.
-                    const [, stopwatchS, ack] = accum;
-                    if (ack) {
-                        return AscMode.Normal;
-                    } else if (stopwatchS > downgradeEmergencyS) {
-                        return AscMode.Emergency;
-                    }
+            // Overspeed state
+            {
+                if (event === AscEventType.Downgrade) {
+                    // The overspeed state ignores downgrades.
+                    return accum;
+                }
+
+                const [e] = event;
+                if (e === AscEventType.Overspeed) {
+                    // Ignore additional overspeed events, which are likely
+                    // redundant.
+                    return accum;
+                }
+
+                // Clock update; move to another state if warranted, or trip
+                // the acknowledgement flag and add time to the stopwatch.
+                const [, initAspect, initSpeedMps, stopwatchS, ack] = accum;
+                const underSpeed = frp.snapshot(aSpeedMps) < toUnderspeedSetpointMps(frp.snapshot(theCabAspect));
+                const acked = ack || frp.snapshot(acknowledge);
+                if (underSpeed && acked && frp.snapshot(coastOrBrake)) {
+                    // Penalty acknowledged and we are under-speed.
+                    return AscMode.Normal;
+                }
+
+                // Brake assurance rate check
+                const brakeAssuranceRateMphS = toBrakeAssuranceRateMphS(initAspect, initSpeedMps);
+                const brakeAssuranceTimeS = toBrakeAssuranceTimeS(initAspect, initSpeedMps);
+                const isBrakeAssurance =
+                    brakeAssuranceRateMphS !== undefined
+                        ? frp.snapshot(accelMphS) < brakeAssuranceRateMphS || stopped
+                        : true;
+                if (brakeAssuranceTimeS !== undefined && stopwatchS > brakeAssuranceTimeS && !isBrakeAssurance) {
+                    // Brake assurance timer has elapsed; apply emergency
+                    // braking.
+                    return AscMode.Emergency;
+                } else {
+                    // Update stopwatch and acknowledgement states.
                     const [, dt] = event;
-                    return [AscMode.Downgrade, stopwatchS + dt, frp.snapshot(acknowledge) || ack];
+                    return [AscMode.Overspeed, initAspect, initSpeedMps, stopwatchS + dt, acked];
                 }
-
-                // Overspeed state
-                {
-                    if (event === AscEventType.Downgrade) {
-                        // The overspeed state ignores downgrades.
-                        return accum;
-                    }
-
-                    const [e] = event;
-                    if (e === AscEventType.Overspeed) {
-                        // Ignore additional overspeed events, which are likely
-                        // redundant.
-                        return accum;
-                    }
-
-                    // Clock update; move to another state if warranted, or trip
-                    // the acknowledgement flag and add time to the stopwatch.
-                    const [, initAspect, initSpeedMps, stopwatchS, ack] = accum;
-                    const underSpeed = frp.snapshot(aSpeedMps) < toUnderspeedSetpointMps(frp.snapshot(theCabAspect));
-                    const acked = ack || frp.snapshot(acknowledge);
-                    if (underSpeed && acked && frp.snapshot(coastOrBrake)) {
-                        // Penalty acknowledged and we are under-speed.
-                        return AscMode.Normal;
-                    }
-
-                    // Brake assurance rate check
-                    const brakeAssuranceRateMphS = toBrakeAssuranceRateMphS(initAspect, initSpeedMps);
-                    const brakeAssuranceTimeS = toBrakeAssuranceTimeS(initAspect, initSpeedMps);
-                    const isBrakeAssurance =
-                        brakeAssuranceRateMphS !== undefined
-                            ? frp.snapshot(accelMphS) < brakeAssuranceRateMphS || stopped
-                            : true;
-                    if (brakeAssuranceTimeS !== undefined && stopwatchS > brakeAssuranceTimeS && !isBrakeAssurance) {
-                        // Brake assurance timer has elapsed; apply emergency
-                        // braking.
-                        return AscMode.Emergency;
-                    } else {
-                        // Update stopwatch and acknowledgement states.
-                        const [, dt] = event;
-                        return [AscMode.Overspeed, initAspect, initSpeedMps, stopwatchS + dt, acked];
-                    }
-                }
-            },
-            AscMode.Normal,
-            isCutOut
-        ),
+            }
+        }, AscMode.Normal),
         frp.map(accum => {
             if (accum === AscMode.Normal) {
                 return {

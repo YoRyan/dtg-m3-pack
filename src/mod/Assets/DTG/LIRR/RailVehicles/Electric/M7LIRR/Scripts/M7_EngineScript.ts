@@ -283,7 +283,7 @@ const me = new FrpEngine(() => {
         frp.map((pc): CssEvent => [CssEventType.Aspect, cs.toLirrAspect(pc)])
     );
     const cabSignalWithDelay$ = frp.compose(
-        me.createUpdateDeltaStream(),
+        me.createUpdateDeltaStream(me.isEngineWithKey),
         frp.map((dt): CssEvent => [CssEventType.Update, dt]),
         frp.merge(cabSignal$),
         frp.fold<CssAccum, CssEvent>(
@@ -330,7 +330,8 @@ const me = new FrpEngine(() => {
                     : 0,
             frp.stepper(cabSignalWithDelay$, cs.LirrAspect.Speed15),
             hasPower
-        )
+        ),
+        me.isEngineWithKey
     );
     setSignalSpeed$(cv => me.rv.SetControlValue("SignalSpeedLimit", 0, cv));
 
@@ -353,7 +354,7 @@ const me = new FrpEngine(() => {
         frp.map(_ => ale.AlerterInput.ActivityThatCancelsPenalty)
     );
     const aleInput$ = frp.compose(
-        me.createUpdateStreamForBehavior(aleActivity),
+        me.createUpdateStreamForBehavior(aleActivity, me.isEngineWithKey),
         frp.filter(v => v),
         frp.map(_ => ale.AlerterInput.Activity),
         frp.merge(aleInputCancelsPenalty$)
@@ -379,7 +380,8 @@ const me = new FrpEngine(() => {
             },
             frp.stepper(ascCutIn$, false),
             hasPower
-        )
+        ),
+        me.isEngineWithKey
     );
     const asc$ = frp.compose(
         asc.create(me, cabSignalWithDelay$, acknowledge, coastOrBrake, ascCutIn$, hasPower),
@@ -416,7 +418,8 @@ const me = new FrpEngine(() => {
             frp.stepper(acsesCutIn$, false),
             hasPower,
             acsesState
-        )
+        ),
+        me.isEngineWithKey
     );
     const acsesBeep$ = frp.compose(
         acses$,
@@ -440,11 +443,11 @@ const me = new FrpEngine(() => {
                 }
             }
         }),
-        me.createEventStreamTimer(),
+        me.createEventStreamTimer(me.isEngineWithKey),
         frp.map(onOff => (onOff ? 1 : 0))
     );
     const acsesOverspeed$ = frp.compose(
-        me.createUpdateDeltaStream(),
+        me.createUpdateDeltaStream(me.isEngineWithKey),
         frp.fold<Overspeed, number>((accum, dt) => {
             const state = frp.snapshot(acsesState);
             let mode;
@@ -541,7 +544,8 @@ const me = new FrpEngine(() => {
             aleState,
             ascState,
             acsesState
-        )
+        ),
+        me.isEngineWithKey
     );
     isAnyPenalty$(penalty => {
         me.rv.SetControlValue("PenaltyIndicator", 0, penalty ? 1 : 0);
@@ -554,7 +558,8 @@ const me = new FrpEngine(() => {
             aleState,
             ascState,
             acsesState
-        )
+        ),
+        me.isEngineWithKey
     );
     isAnyAlarm$(alarm => {
         me.rv.SetControlValue("AWSWarnCount", 0, alarm ? 1 : 0);
@@ -602,8 +607,7 @@ const me = new FrpEngine(() => {
         () => (me.rv.GetControlValue("Charging", 0) as number) > 0.5
     );
     const chargeBrakes$ = frp.compose(
-        me.createUpdateDeltaStream(),
-        me.filterPlayerEngine(),
+        me.createUpdateDeltaStream(me.isEngineWithKey),
         frp.filter(_ => frp.snapshot(brakesCanCharge)),
         frp.map((dt): BrakeEvent => {
             const chargePerSecond = 0.063; // 10 seconds to recharge to service braking
@@ -619,8 +623,7 @@ const me = new FrpEngine(() => {
         frp.map(autostart => (autostart === ControlEvent.Autostart ? BrakeType.Autostart : BrakeType.Emergency))
     );
     const brakeCommandAndEvents$ = frp.compose(
-        me.createUpdateStreamForBehavior(brakeCommand),
-        me.filterPlayerEngine(),
+        me.createUpdateStreamForBehavior(brakeCommand, me.isEngineWithKey),
         frp.merge(emergencyBrakeEvent$),
         frp.merge(autostartBrakeEvent$),
         frp.merge(chargeBrakes$),
@@ -671,7 +674,7 @@ const me = new FrpEngine(() => {
         brakeCommand,
         emergencyBrake
     );
-    const throttle$ = frp.compose(me.createUpdateStreamForBehavior(throttleCommand), me.filterPlayerEngine());
+    const throttle$ = me.createUpdateStreamForBehavior(throttleCommand, me.isEngineWithKey);
     // The physics value of the reverser should be one of three values.
     const reverser$ = frp.compose(
         userReverser$,
@@ -705,8 +708,7 @@ const me = new FrpEngine(() => {
         emergencyBrake
     );
     const dynamicBrake$ = frp.compose(
-        me.createUpdateDeltaStream(),
-        me.filterPlayerEngine(),
+        me.createUpdateDeltaStream(me.isEngineWithKey),
         // Simulate an exponential lag time for the dynamics to kick in.
         frp.fold<number, number>((accum, dt) => {
             const target = frp.snapshot(dynamicBrakeCommand);
@@ -777,11 +779,10 @@ const me = new FrpEngine(() => {
     });
 
     // Driving display indicators
-    const speedoMphDigits$ = frp.compose(speedoMph$, me.filterPlayerEngine(), threeDigitDisplay),
-        brakePipePsiDigits$ = frp.compose(brakePipePsi$, me.filterPlayerEngine(), threeDigitDisplay),
+    const speedoMphDigits$ = frp.compose(speedoMph$, threeDigitDisplay),
+        brakePipePsiDigits$ = frp.compose(brakePipePsi$, threeDigitDisplay),
         brakeCylinderPsiDigits$ = frp.compose(
             me.createGetCvStream("TrainBrakeCylinderPressurePSI", 0),
-            me.filterPlayerEngine(),
             threeDigitDisplay
         );
     speedoMphDigits$(([digits, guide]) => {
@@ -1017,7 +1018,7 @@ const me = new FrpEngine(() => {
     });
 
     // Force the pantograph on to allow driving on routes with overhead electrification.
-    const setPantograph$ = frp.compose(me.createUpdateStream(), me.filterPlayerEngine());
+    const setPantograph$ = me.createUpdateStream(me.isEngineWithKey);
     setPantograph$(_ => {
         me.rv.SetControlValue("PantographControl", 0, 1);
         me.rv.SetControlValue("VirtualPantographControl", 0, 0);

@@ -5,7 +5,7 @@
 
 import * as frp from "./frp";
 import { FrpEngine } from "./frp-engine";
-import { foldWithResetBehavior, fsm } from "./frp-extra";
+import { fsm } from "./frp-extra";
 import { VehicleCamera } from "./frp-vehicle";
 import * as rw from "./railworks";
 
@@ -30,12 +30,17 @@ export enum AlerterInput {
     ActivityThatCancelsPenalty,
 }
 
-type AlerterUpdate = { deltaS: number };
 type AlerterAccum = [AlerterMode.Countdown, number] | [AlerterMode.Alarm, number] | AlerterMode.Penalty;
 enum AlerterMode {
     Countdown,
     Alarm,
     Penalty,
+}
+
+type AlerterEvent = [type: AlerterEventType.Update, deltaS: number] | AlerterEventType.Reset | AlerterInput;
+enum AlerterEventType {
+    Update,
+    Reset,
 }
 
 const popupS = 5;
@@ -59,8 +64,8 @@ export function create(
 ): frp.Stream<AlerterState> {
     const cutInOut$ = frp.compose(
         cutIn,
+        frp.filter(_ => frp.snapshot(e.isEngineWithKey)),
         fsm(false),
-        e.filterPlayerEngine(),
         frp.filter(([from, to]) => from !== to)
     );
     cutInOut$(([, to]) => {
@@ -68,12 +73,18 @@ export function create(
         rw.ScenarioManager.ShowAlertMessageExt("ALE Vigilance System", msg, popupS, "");
     });
 
-    const isCutOut = frp.liftN(
-        (cutIn, hasPower, isPlayerEngine) => !(cutIn && hasPower && isPlayerEngine),
+    const isActive = frp.liftN(
+        (cutIn, hasPower, isPlayerEngine) => cutIn && hasPower && isPlayerEngine,
         frp.stepper(cutIn, false),
         hasPower,
-        () => e.eng.GetIsPlayer()
+        e.isEngineWithKey
     );
+    const reset$ = frp.compose(
+        e.createUpdateStreamForBehavior(isActive, e.isEngineWithKey),
+        frp.filter(active => !active),
+        frp.map((_): AlerterEvent => AlerterEventType.Reset)
+    );
+
     const camera = frp.stepper(e.createCameraStream(), VehicleCamera.FrontCab);
     const isExteriorCamera = () => {
         switch (frp.snapshot(camera)) {
@@ -86,33 +97,35 @@ export function create(
     };
     const accumStart: AlerterAccum = [AlerterMode.Countdown, countdownS];
     return frp.compose(
-        e.createUpdateDeltaStream(),
-        frp.map((dt): AlerterUpdate => {
-            return { deltaS: dt };
-        }),
+        e.createUpdateDeltaStream(isActive),
+        frp.map((dt): AlerterEvent => [AlerterEventType.Update, dt]),
         frp.merge(input),
-        foldWithResetBehavior<AlerterAccum, AlerterUpdate | AlerterInput>(
-            (accum, input) => {
-                if (accum === AlerterMode.Penalty) {
-                    return input === AlerterInput.ActivityThatCancelsPenalty ? accumStart : AlerterMode.Penalty;
-                } else if (
-                    input === AlerterInput.Activity ||
-                    input === AlerterInput.ActivityThatCancelsPenalty ||
-                    frp.snapshot(isExteriorCamera)
-                ) {
-                    return accumStart;
+        frp.merge(reset$),
+        frp.fold<AlerterAccum, AlerterEvent>((accum, event) => {
+            // Handle reset events (and other events while in the inactive state).
+            if (!frp.snapshot(isActive) || event === AlerterEventType.Reset) {
+                return accumStart;
+            }
+
+            if (accum === AlerterMode.Penalty) {
+                return event === AlerterInput.ActivityThatCancelsPenalty ? accumStart : AlerterMode.Penalty;
+            } else if (
+                event === AlerterInput.Activity ||
+                event === AlerterInput.ActivityThatCancelsPenalty ||
+                frp.snapshot(isExteriorCamera)
+            ) {
+                return accumStart;
+            } else {
+                const [, accumS] = accum;
+                const [, dt] = event;
+                const leftS = accumS - dt;
+                if (accum[0] === AlerterMode.Countdown) {
+                    return leftS <= 0 ? [AlerterMode.Alarm, alarmS] : [AlerterMode.Countdown, leftS];
                 } else {
-                    const leftS = accum[1] - input.deltaS;
-                    if (accum[0] === AlerterMode.Countdown) {
-                        return leftS <= 0 ? [AlerterMode.Alarm, alarmS] : [AlerterMode.Countdown, leftS];
-                    } else {
-                        return leftS <= 0 ? AlerterMode.Penalty : [AlerterMode.Alarm, leftS];
-                    }
+                    return leftS <= 0 ? AlerterMode.Penalty : [AlerterMode.Alarm, leftS];
                 }
-            },
-            accumStart,
-            isCutOut
-        ),
+            }
+        }, accumStart),
         frp.map(accum => {
             return {
                 brakes: accum === AlerterMode.Penalty ? AlerterBrake.Penalty : AlerterBrake.None,
