@@ -472,14 +472,6 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("ACSESAlarm", 0, state.alarm ? 1 : 0);
         me.rv.SetControlValue("ACSESStop", 0, state.brakes === acses.AcsesBrake.PositiveStop ? 1 : 0);
 
-        let os;
-        if (state.overspeed) {
-            os = state.brakes === acses.AcsesBrake.None ? 1 : 2;
-        } else {
-            os = 0;
-        }
-        me.rv.SetControlValue("ACSESOverspeed", 0, os);
-
         let h, t, u, d;
         if (state.trackSpeed === acses.AcsesSpeed.CutOut) {
             [h, t, u, d] = [-1, -1, -1, 0];
