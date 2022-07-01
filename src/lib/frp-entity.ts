@@ -21,8 +21,8 @@ export class FrpEntity {
     protected always: frp.Behavior<boolean> = () => true;
 
     private onInit: (this: void) => void;
-    private updateTimeList = new FrpList<number>();
-    private updateDeltaList = new FrpList<number>();
+    private updateTimeSource = new FrpSource<number>();
+    private updateDeltaSource = new FrpSource<number>();
     private lastTimeS: number | undefined = undefined;
     private updatingEveryFrame = false;
 
@@ -59,7 +59,7 @@ export class FrpEntity {
      * @returns The new event stream.
      */
     createUpdateStream(update = this.always): frp.Stream<number> {
-        return this.updateTimeList.createStream(update);
+        return this.updateTimeSource.createStream(update);
     }
 
     /**
@@ -82,7 +82,7 @@ export class FrpEntity {
      * @returns The new event stream.
      */
     createUpdateDeltaStream(update = this.always): frp.Stream<number> {
-        return this.updateDeltaList.createStream(update);
+        return this.updateDeltaSource.createStream(update);
     }
 
     /**
@@ -136,11 +136,11 @@ export class FrpEntity {
      */
     protected updateLoop() {
         const time = this.e.GetSimulationTime();
-        this.updateTimeList.call(time);
+        this.updateTimeSource.call(time);
 
         if (this.lastTimeS !== undefined) {
             const dt = time - this.lastTimeS;
-            this.updateDeltaList.call(dt);
+            this.updateDeltaSource.call(dt);
         }
         this.lastTimeS = time;
     }
@@ -160,7 +160,7 @@ export class FrpEntity {
  * A list of callbacks that proxies access to a single event stream source. To
  * improve performance, callbacks are indexed by a guard behavior.
  */
-export class FrpList<T> {
+export class FrpSource<T> {
     private nextGuards = new Map<frp.Behavior<boolean>, ((arg0: T) => void)[]>();
 
     /**

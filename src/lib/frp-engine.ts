@@ -1,8 +1,7 @@
 /** @noSelfInFile */
 
 import * as frp from "./frp";
-import { FrpList } from "./frp-entity";
-import { FrpVehicle } from "./frp-vehicle";
+import { FrpQueuedSource, FrpVehicle } from "./frp-vehicle";
 import * as rw from "./railworks";
 
 export class FrpEngine extends FrpVehicle {
@@ -15,7 +14,7 @@ export class FrpEngine extends FrpVehicle {
      */
     public isEngineWithKey: frp.Behavior<boolean> = () => this.eng.GetIsEngineWithKey();
 
-    private signalMessageList = new FrpList<string>();
+    private signalMessageSource = new FrpQueuedSource<string>();
 
     /**
      * Create an event stream that fires for the OnCustomSignalMessage()
@@ -23,15 +22,21 @@ export class FrpEngine extends FrpVehicle {
      * @returns The new event stream.
      */
     createOnCustomSignalMessageStream(): frp.Stream<string> {
-        return this.signalMessageList.createStream(this.isEngineWithKey);
+        return this.signalMessageSource.createStream(this.always);
     }
 
     setup() {
         super.setup();
 
         OnCustomSignalMessage = msg => {
-            this.signalMessageList.call(msg);
+            this.signalMessageSource.call(msg);
             this.updateLoopFromCallback();
         };
+    }
+
+    protected afterInitAndSettled() {
+        super.afterInitAndSettled();
+
+        this.signalMessageSource.flush();
     }
 }

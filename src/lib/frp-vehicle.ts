@@ -2,7 +2,7 @@
 
 import * as c from "./constants";
 import * as frp from "./frp";
-import { FrpEntity, FrpList } from "./frp-entity";
+import { FrpEntity, FrpSource } from "./frp-entity";
 import { fsm, rejectUndefined } from "./frp-extra";
 import * as rw from "./railworks";
 
@@ -79,9 +79,9 @@ export class FrpVehicle extends FrpEntity {
      */
     public isPlayer: frp.Behavior<boolean> = () => this.rv.GetIsPlayer();
 
-    private onCvChangeList = new FrpList<ControlValueChange>();
-    private consistMessageList = new FrpList<ConsistMessage>();
-    private vehicleCameraList = new FrpList<VehicleCamera>();
+    private onCvChangeSource = new FrpSource<ControlValueChange>();
+    private consistMessageSource = new FrpQueuedSource<ConsistMessage>();
+    private vehicleCameraSource = new FrpQueuedSource<VehicleCamera>();
 
     /**
      * Construct a new rail vehicle.
@@ -104,6 +104,7 @@ export class FrpVehicle extends FrpEntity {
                 done = true;
                 this.activateUpdatesEveryFrame(false);
                 onInitAndSettled();
+                this.afterInitAndSettled();
             });
         });
     }
@@ -114,7 +115,7 @@ export class FrpVehicle extends FrpEntity {
      * @returns The new event stream.
      */
     createOnCvChangeStream(): frp.Stream<ControlValueChange> {
-        return this.onCvChangeList.createStream(this.isPlayer);
+        return this.onCvChangeSource.createStream(this.always);
     }
 
     /**
@@ -122,7 +123,7 @@ export class FrpVehicle extends FrpEntity {
      * @returns The new event stream.
      */
     createOnConsistMessageStream(): frp.Stream<ConsistMessage> {
-        return this.consistMessageList.createStream(this.isPlayer);
+        return this.consistMessageSource.createStream(this.always);
     }
 
     /**
@@ -145,7 +146,7 @@ export class FrpVehicle extends FrpEntity {
      * @returns The new event stream.
      */
     createCameraStream(): frp.Stream<VehicleCamera> {
-        return this.vehicleCameraList.createStream(this.isPlayer);
+        return this.vehicleCameraSource.createStream(this.always);
     }
 
     /**
@@ -239,11 +240,11 @@ export class FrpVehicle extends FrpEntity {
         super.setup();
 
         OnControlValueChange = (name, index, value) => {
-            this.onCvChangeList.call([name, index, value]);
+            this.onCvChangeSource.call([name, index, value]);
             this.updateLoopFromCallback();
         };
         OnConsistMessage = (id, content, dir) => {
-            this.consistMessageList.call([id, content, dir]);
+            this.consistMessageSource.call([id, content, dir]);
             this.updateLoopFromCallback();
         };
         OnCameraEnter = (cabEnd, carriageCam) => {
@@ -253,12 +254,63 @@ export class FrpVehicle extends FrpEntity {
             } else {
                 vc = VehicleCamera.Carriage;
             }
-            this.vehicleCameraList.call(vc);
+            this.vehicleCameraSource.call(vc);
             this.updateLoopFromCallback();
         };
         OnCameraLeave = () => {
-            this.vehicleCameraList.call(VehicleCamera.Outside);
+            this.vehicleCameraSource.call(VehicleCamera.Outside);
             this.updateLoopFromCallback();
         };
+    }
+
+    protected afterInitAndSettled() {
+        this.consistMessageSource.flush();
+        this.vehicleCameraSource.flush();
+    }
+}
+
+/**
+ * A queue for FrpSource that stores events that happen before the
+ * initialize-and-wait phase has completed. Upon initialization, the queue is
+ * flushed.
+ */
+export class FrpQueuedSource<T> {
+    private source = new FrpSource<T>();
+    private queue: T[] | undefined = [];
+
+    /**
+     * Create a new event stream and register its callback to the underlying
+     * stream source.
+     * @param guard The event stream will only produce events while this
+     * behavior is true.
+     */
+    createStream(guard: frp.Behavior<boolean>): frp.Stream<T> {
+        return this.source.createStream(guard);
+    }
+
+    /**
+     * Queue the provided value, or if the queue has already been flushed, call
+     * the callbacks in the underlying stream source with the provided value.
+     * @param value The value.
+     */
+    call(value: T) {
+        if (this.queue !== undefined) {
+            this.queue.push(value);
+        } else {
+            this.source.call(value);
+        }
+    }
+
+    /**
+     * Flush all values from the queue and, henceforth, pass values directly to
+     * the underlying stream source.
+     */
+    flush() {
+        if (this.queue !== undefined) {
+            for (const value of this.queue) {
+                this.source.call(value);
+            }
+            this.queue = undefined;
+        }
     }
 }
