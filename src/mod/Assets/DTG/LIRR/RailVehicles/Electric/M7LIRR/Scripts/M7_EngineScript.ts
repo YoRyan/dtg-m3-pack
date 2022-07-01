@@ -913,18 +913,11 @@ const me = new FrpEngine(() => {
         frp.liftN(
             (authority, speedMps, brakeCylPsi) => {
                 if (authority === VehicleAuthority.IsPlayer) {
-                    if (brakeCylPsi <= 12) {
-                        return BrakeLight.Green;
-                    } else if (brakeCylPsi <= 15) {
-                        return BrakeLight.Dark;
-                    } else {
-                        return BrakeLight.Amber;
-                    }
+                    return brakeCylPsi > 15 && speedMps < c.stopSpeed ? BrakeLight.Amber : BrakeLight.Green;
                 } else if (authority === VehicleAuthority.IsAiParked) {
                     return BrakeLight.Amber;
                 } else {
-                    const isSlow = Math.abs(speedMps) < 15 * c.mph.toMps;
-                    return isSlow ? BrakeLight.Amber : BrakeLight.Green;
+                    return speedMps < c.stopSpeed ? BrakeLight.Amber : BrakeLight.Green;
                 }
             },
             authority,
