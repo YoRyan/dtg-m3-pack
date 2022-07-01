@@ -828,9 +828,19 @@ const me = new FrpEngine(() => {
     const couplings = frp.stepper<VehicleCouplings>(me.createCouplingsStream(), [false, false]);
 
     // Headlights and marker lights
-    const dimLights = [new rw.Light("Forward_Headlight_3"), new rw.Light("Forward_Headlight_4")];
-    const brightLights = [new rw.Light("Forward_Headlight_1"), new rw.Light("Forward_Headlight_2")];
-    const markerLights = [new rw.Light("Backward_Taillight_1"), new rw.Light("Backward_Taillight_2")];
+    const dimLights = [
+        new rw.Light("Headlight_Dim_L"),
+        new rw.Light("Headlight_Dim_R"),
+        new rw.Light("Headlight_Dim_AuxL"),
+        new rw.Light("Headlight_Dim_AuxR"),
+    ];
+    const brightLights = [
+        new rw.Light("Headlight_Bright_L"),
+        new rw.Light("Headlight_Bright_R"),
+        new rw.Light("Headlight_Bright_AuxL"),
+        new rw.Light("Headlight_Bright_AuxR"),
+    ];
+    const markerLights = [new rw.Light("Taillight_L"), new rw.Light("Taillight_R")];
     const headlights$ = frp.compose(
         me.createAuthorityStream(),
         frp.map(auth => {
@@ -857,7 +867,7 @@ const me = new FrpEngine(() => {
     );
     headlights$(setting => {
         for (const light of dimLights) {
-            light.Activate(setting === HeadLight.Dim || setting === HeadLight.Bright);
+            light.Activate(setting === HeadLight.Dim);
         }
         for (const light of brightLights) {
             light.Activate(setting === HeadLight.Bright);
