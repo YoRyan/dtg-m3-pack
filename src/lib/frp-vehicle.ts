@@ -94,11 +94,12 @@ export class FrpVehicle extends FrpEntity {
         // our callback.
         super(() => {
             let done = false;
+            const initTimeS = 0.5;
             this.activateUpdatesEveryFrame(true);
             const wait$ = frp.compose(
                 this.createUpdateStream(() => !done),
                 fsm(0),
-                frp.filter(([from, to]) => from < 0.5 && to >= 0.5)
+                frp.filter(([from, to]) => from < initTimeS && to >= initTimeS)
             );
             wait$(_ => {
                 done = true;
