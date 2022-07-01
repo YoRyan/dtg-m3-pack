@@ -770,6 +770,10 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("VirtualEmergencyBrake", 0, 0); // Reset if tripped
     });
 
+    // Operating display indicators
+    const nMultipleUnits$ = me.createUpdateStreamForBehavior(nMultipleUnits, me.isEngineWithKey);
+    nMultipleUnits$(n => me.rv.SetControlValue("Cars", 0, n));
+
     // Driving display indicators
     const speedoMphDigits$ = frp.compose(speedoMph$, threeDigitDisplay),
         brakePipePsiDigits$ = frp.compose(brakePipePsi$, threeDigitDisplay),
