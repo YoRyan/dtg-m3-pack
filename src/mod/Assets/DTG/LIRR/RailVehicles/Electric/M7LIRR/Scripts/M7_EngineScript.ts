@@ -711,11 +711,17 @@ const me = new FrpEngine(() => {
     );
     const dynamicBrake$ = frp.compose(
         me.createUpdateDeltaStream(me.isEngineWithKey),
-        // Simulate an exponential lag time for the dynamics to kick in.
+        // Simulate a lag time for the dynamics to ramp up and down.
         frp.fold<number, number>((accum, dt) => {
             const target = frp.snapshot(dynamicBrakeCommand);
-            const maxChangePerS = ((1 - 0.25) / (1 - 0)) * (accum - 0) + 0.25;
-            return target <= accum ? target : Math.min(accum + maxChangePerS * dt, target);
+            const maxChangePerS = 0.25;
+            if (target < accum) {
+                return Math.max(accum - maxChangePerS * dt, target);
+            } else if (target > accum) {
+                return Math.min(accum + maxChangePerS * dt, target);
+            } else {
+                return target;
+            }
         }, 0),
         // Physics are calibrated for a 12-car train.
         frp.map((v: number) => (v * frp.snapshot(nMultipleUnits)) / 12)
