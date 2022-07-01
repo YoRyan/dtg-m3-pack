@@ -20,10 +20,10 @@ enum ControlEvent {
 }
 
 enum InterlockAllows {
-    MasterKeyIn,
-    MasterKeyOutReverserNonKeyOut,
-    ReverserKeyOutMasterControllerNonEmergency,
-    MasterControllerEmergency,
+    MasterKeyIn = 0,
+    MasterKeyOutReverserNonKeyOut = 1,
+    ReverserKeyOutMasterControllerNonEmergency = 2,
+    MasterControllerEmergency = 3,
 }
 
 type MasterController =
@@ -113,6 +113,7 @@ const me = new FrpEngine(() => {
     );
 
     // The master controller/reverser/master key interlock
+    const interlockInit = me.rv.GetControlValue("Interlock", 0) as InterlockAllows;
     const interlockState$ = frp.compose(
         me.createOnCvChangeStream(),
         frp.merge(autostartEvent$),
@@ -155,9 +156,11 @@ const me = new FrpEngine(() => {
                     break;
             }
             return accum;
-        }, InterlockAllows.MasterKeyIn)
+        }, interlockInit),
+        frp.hub()
     );
-    const interlockState = frp.stepper(interlockState$, InterlockAllows.MasterKeyIn);
+    interlockState$(i => me.rv.SetControlValue("Interlock", 0, i as number));
+    const interlockState = frp.stepper(interlockState$, interlockInit);
 
     // "Write back" values to interlocked controls so that they cannot be
     // manipulated by the player. We also process autostart events here.
@@ -280,12 +283,18 @@ const me = new FrpEngine(() => {
         me.createOnCustomSignalMessageStream(),
         frp.map(msg => cs.toPulseCode(msg)),
         rejectUndefined(),
-        frp.map((pc): CssEvent => [CssEventType.Aspect, cs.toLirrAspect(pc)])
+        frp.map(pc => cs.toLirrAspect(pc)),
+        frp.hub()
     );
+    const cabSignalEvent$ = frp.compose(
+        cabSignal$,
+        frp.map((aspect): CssEvent => [CssEventType.Aspect, aspect])
+    );
+    const cabSignalInit = me.rv.GetControlValue("LirrAspect", 0) as cs.LirrAspect;
     const cabSignalWithDelay$ = frp.compose(
         me.createUpdateDeltaStream(me.isEngineWithKey),
         frp.map((dt): CssEvent => [CssEventType.Update, dt]),
-        frp.merge(cabSignal$),
+        frp.merge(cabSignalEvent$),
         frp.fold<CssAccum, CssEvent>(
             (accum, event) => {
                 const [e] = event;
@@ -311,7 +320,7 @@ const me = new FrpEngine(() => {
                     }
                 }
             },
-            { current: cs.LirrAspect.Speed15, next: undefined }
+            { current: cabSignalInit, next: undefined }
         ),
         frp.map(accum => accum.current)
     );
@@ -328,11 +337,12 @@ const me = new FrpEngine(() => {
                           [cs.LirrAspect.Speed80]: 80,
                       }[aspect]
                     : 0,
-            frp.stepper(cabSignalWithDelay$, cs.LirrAspect.Speed15),
+            frp.stepper(cabSignalWithDelay$, cabSignalInit),
             hasPower
         ),
         me.isEngineWithKey
     );
+    cabSignal$(aspect => me.rv.SetControlValue("LirrAspect", 0, aspect as number));
     setSignalSpeed$(cv => me.rv.SetControlValue("SignalSpeedLimit", 0, cv));
 
     // Alerter (ALE) vigilance subsystem
@@ -736,7 +746,7 @@ const me = new FrpEngine(() => {
                     return accum;
                 }
             }
-        }, 1),
+        }, me.rv.GetControlValue("TrainBrakeControl", 0) as number),
         frp.hub()
     );
     throttle$(cv => {
