@@ -287,7 +287,7 @@ export function create(
             const [, initAspect, initSpeedMps, , ack] = accum;
             const brakeAssuranceRateMphS = toBrakeAssuranceRateMphS(initAspect, initSpeedMps);
             const isBrakeAssurance =
-                brakeAssuranceRateMphS !== undefined ? frp.snapshot(accelMphS) < brakeAssuranceRateMphS : false;
+                brakeAssuranceRateMphS !== undefined ? frp.snapshot(accelMphS) < brakeAssuranceRateMphS : true;
             const satisfied = isBrakeAssurance && ack && frp.snapshot(coastOrBrake);
             return {
                 brakes: AscBrake.Penalty,
