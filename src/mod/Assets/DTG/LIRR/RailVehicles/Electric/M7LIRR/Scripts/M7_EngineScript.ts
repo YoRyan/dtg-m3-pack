@@ -8,7 +8,7 @@ import * as c from "../../../../../../../../lib/constants";
 import * as dest from "../../../../../../../../lib/destinations";
 import * as frp from "../../../../../../../../lib/frp";
 import { FrpEngine } from "../../../../../../../../lib/frp-engine";
-import { debug, fsm, rejectUndefined } from "../../../../../../../../lib/frp-extra";
+import { fsm, rejectUndefined } from "../../../../../../../../lib/frp-extra";
 import { VehicleAuthority, VehicleCamera, VehicleCouplings } from "../../../../../../../../lib/frp-vehicle";
 import * as m from "../../../../../../../../lib/math";
 import * as rw from "../../../../../../../../lib/railworks";
