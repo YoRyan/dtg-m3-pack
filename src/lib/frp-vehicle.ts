@@ -241,7 +241,6 @@ export class FrpVehicle extends FrpEntity {
 
         OnControlValueChange = (name, index, value) => {
             this.onCvChangeSource.call([name, index, value]);
-            this.updateLoopFromCallback();
         };
         OnConsistMessage = (id, content, dir) => {
             this.consistMessageSource.call([id, content, dir]);
