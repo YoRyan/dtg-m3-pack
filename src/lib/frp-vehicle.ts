@@ -266,6 +266,19 @@ export class FrpVehicle extends FrpEntity {
         this.consistMessageSource.flush();
         this.vehicleCameraSource.flush();
     }
+
+    protected updateLoop() {
+        // To save frames, don't update AI trains that are far away from the
+        // camera.
+        if (!this.rv.GetIsPlayer()) {
+            const [x, y, z] = this.rv.getNearPosition();
+            const distanceM = Math.sqrt(Math.pow(x, 2) + Math.pow(y, 2) + Math.pow(z, 2));
+            if (distanceM > 1000) {
+                return;
+            }
+        }
+        super.updateLoop();
+    }
 }
 
 /**
