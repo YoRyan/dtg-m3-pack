@@ -1032,6 +1032,20 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("CompressorState", 0, power ? 1 : 0);
     });
 
+    // Master controller and reverser positions default to coast and neutral,
+    // which isn't allowed by the initial interlocking state. Mute clicks for
+    // these controls when first initializing a train.
+    const startupMuteS = 1;
+    const setCabSounds$ = frp.compose(
+        me.createUpdateDeltaStream(),
+        frp.fold(
+            (muteS, input) => (me.eng.GetIsEngineWithKey() ? Math.max(muteS - input, 0) : startupMuteS),
+            startupMuteS
+        ),
+        frp.map(muteS => muteS <= 0)
+    );
+    setCabSounds$(on => me.rv.SetControlValue("IsPlayerControl", 0, on ? 1 : 0));
+
     // Force the pantograph on to allow driving on routes with overhead electrification.
     const setPantograph$ = me.createUpdateStream(me.isEngineWithKey);
     setPantograph$(_ => {
