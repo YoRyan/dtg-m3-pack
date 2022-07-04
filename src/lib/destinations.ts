@@ -12,6 +12,8 @@ const destinationMessageId = 10002;
 const popupS = 3;
 const popupItems = 5;
 
+export type Destination = [character: string, name: string];
+
 /**
  * Set up the destination board controller, and send and receive destination
  * selection messages across the consist.
@@ -20,9 +22,9 @@ const popupItems = 5;
  * @param previous A stream that selects the previous destination.
  * @param next A stream that selects the next destination.
  */
-export function setup(v: FrpVehicle, destinations: string[], previous: frp.Stream<any>, next: frp.Stream<any>) {
+export function setup(v: FrpVehicle, destinations: Destination[], previous: frp.Stream<any>, next: frp.Stream<any>) {
     const nDest = destinations.length;
-    const currentIndex = () => getMyDestinationIndex(v);
+    const currentIndex = () => getMyDestinationIndex(v, destinations);
     const movePrevious$ = frp.compose(
         previous,
         frp.map(_ => -1)
@@ -61,7 +63,7 @@ export function setup(v: FrpVehicle, destinations: string[], previous: frp.Strea
             if (idx >= nDest) {
                 break;
             } else {
-                const name = destinations[idx];
+                const [, name] = destinations[idx];
                 lines.push(idx === selected ? `> ${name} <` : name);
             }
         }
@@ -74,8 +76,9 @@ export function setup(v: FrpVehicle, destinations: string[], previous: frp.Strea
             false
         );
         // Set the rail vehicle number and broadcast to the rest of the consist.
-        setMyDestinationIndex(v, selected);
-        sendDestinationIndex(v, selected);
+        const [char] = destinations[selected];
+        setMyDestinationChar(v, char);
+        sendDestinationChar(v, char);
     });
     // Handle consist messages.
     const consistMessage$ = v.createOnConsistMessageStreamFor(destinationMessageId);
@@ -85,13 +88,16 @@ export function setup(v: FrpVehicle, destinations: string[], previous: frp.Strea
     });
 }
 
-function getMyDestinationIndex(v: FrpVehicle) {
+function getMyDestinationIndex(v: FrpVehicle, destinations: Destination[]) {
     const number = v.rv.GetRVNumber();
-    return string.byte(number) - string.byte("a");
-}
-
-function setMyDestinationIndex(v: FrpVehicle, destination: number) {
-    setMyDestinationChar(v, destinationChar(destination));
+    const character = string.sub(number, 1, 1);
+    let idx = 0;
+    destinations.forEach(([char], i) => {
+        if (char === character) {
+            idx = i;
+        }
+    });
+    return idx;
 }
 
 function setMyDestinationChar(v: FrpVehicle, character: string) {
@@ -99,12 +105,7 @@ function setMyDestinationChar(v: FrpVehicle, character: string) {
     v.rv.SetRVNumber(character + string.sub(number, 2));
 }
 
-function sendDestinationIndex(v: FrpVehicle, destination: number) {
-    const char = destinationChar(destination);
-    v.rv.SendConsistMessage(destinationMessageId, char, rw.ConsistDirection.Backward);
-    v.rv.SendConsistMessage(destinationMessageId, char, rw.ConsistDirection.Forward);
-}
-
-function destinationChar(n: number) {
-    return string.char(string.byte("a") + n);
+function sendDestinationChar(v: FrpVehicle, character: string) {
+    v.rv.SendConsistMessage(destinationMessageId, character, rw.ConsistDirection.Backward);
+    v.rv.SendConsistMessage(destinationMessageId, character, rw.ConsistDirection.Forward);
 }
