@@ -320,7 +320,7 @@ export function create(
             return {
                 brakes,
                 alarm,
-                overspeed: aSpeedMps > accum.inForce.alertCurveMps,
+                overspeed: aSpeedMps > accum.inForce.alertCurveMps && accum.inForce.alertCurveMps > 1,
                 trackSpeed: accum.trackSpeed,
             };
         })
