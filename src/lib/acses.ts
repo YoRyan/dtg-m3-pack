@@ -170,7 +170,8 @@ export function create(
                 if (!frp.snapshot(isDegraded) && typeof thePts === "number") {
                     for (const [id, [distanceM, signal]] of frp.snapshot(signalIndex)) {
                         if (signal.proState === rw.ProSignalState.Red) {
-                            const hazard = new StopSignalHazard(theSpeedMps, thePts, distanceM);
+                            const cushionM = 85 + c.ft.toM;
+                            const hazard = new StopSignalHazard(theSpeedMps, thePts + cushionM, distanceM);
                             hazards.push(hazard);
                         }
                     }
