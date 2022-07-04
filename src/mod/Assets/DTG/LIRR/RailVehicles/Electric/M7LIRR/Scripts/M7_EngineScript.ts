@@ -77,6 +77,12 @@ enum OverspeedMode {
     Penalty,
 }
 
+enum PlayerState {
+    NotEngineWithKey,
+    IsEngineWithKey,
+    IsEngineWithKeyAndInside,
+}
+
 enum HeadLight {
     Off,
     Dim,
@@ -1034,17 +1040,45 @@ const me = new FrpEngine(() => {
 
     // Master controller and reverser positions default to coast and neutral,
     // which isn't allowed by the initial interlocking state. Mute clicks for
-    // these controls when first initializing a train.
+    // these controls when first entering the cab.
+    const insideCab$ = frp.compose(
+        me.createCameraStream(),
+        frp.map(vc => vc === VehicleCamera.FrontCab)
+    );
+    const playerState$ = me.createUpdateStreamForBehavior(
+        frp.liftN(
+            (isEngineWithKey, insideCab) => {
+                if (isEngineWithKey) {
+                    return insideCab ? PlayerState.IsEngineWithKeyAndInside : PlayerState.IsEngineWithKey;
+                } else {
+                    return PlayerState.NotEngineWithKey;
+                }
+            },
+            me.isEngineWithKey,
+            frp.stepper(insideCab$, false)
+        )
+    );
+    const isEngineWithKeyAndWasInside$ = frp.compose(
+        playerState$,
+        frp.fold<boolean, PlayerState>(
+            (initialized, state) =>
+                initialized ? state !== PlayerState.NotEngineWithKey : state === PlayerState.IsEngineWithKeyAndInside,
+            false
+        )
+    );
+    const isEngineWithKeyAndWasInside = frp.stepper(isEngineWithKeyAndWasInside$, false);
     const startupMuteS = 1;
-    const setCabSounds$ = frp.compose(
+    const enableControlSounds$ = frp.compose(
         me.createUpdateDeltaStream(),
         frp.fold(
-            (muteS, input) => (me.eng.GetIsEngineWithKey() ? Math.max(muteS - input, 0) : startupMuteS),
+            (muteS, input) => (frp.snapshot(isEngineWithKeyAndWasInside) ? Math.max(muteS - input, 0) : startupMuteS),
             startupMuteS
         ),
         frp.map(muteS => muteS <= 0)
     );
-    setCabSounds$(on => me.rv.SetControlValue("IsPlayerControl", 0, on ? 1 : 0));
+    enableControlSounds$(on => {
+        me.rv.SetControlValue("IsPlayerControl", 0, on ? 1 : 0);
+    });
 
     // Force the pantograph on to allow driving on routes with overhead electrification.
     const setPantograph$ = me.createUpdateStream(me.isEngineWithKey);
