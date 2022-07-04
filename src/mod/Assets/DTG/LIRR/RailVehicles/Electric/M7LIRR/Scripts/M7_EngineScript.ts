@@ -306,14 +306,9 @@ const me = new FrpEngine(() => {
                 const [e] = event;
                 if (e === CssEventType.Aspect) {
                     const [, next] = event;
-                    if (accum.current === next) {
-                        return accum;
-                    } else {
-                        const isDowngrade =
-                            (next as number) < (accum.current as number) && next !== cs.LirrAspect.Speed15;
-                        const delayS = isDowngrade ? 1.8 : 3.2;
-                        return { current: accum.current, next: [next, delayS] };
-                    }
+                    const isDowngrade = (next as number) < (accum.current as number) && next !== cs.LirrAspect.Speed15;
+                    const delayS = isDowngrade ? 1.8 : 3.2;
+                    return { current: accum.current, next: [next, delayS] };
                 } else if (accum.next === undefined) {
                     return accum;
                 } else {
