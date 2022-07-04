@@ -273,8 +273,9 @@ export class FrpVehicle extends FrpEntity {
         // camera.
         if (!this.rv.GetIsPlayer()) {
             const [x, y, z] = this.rv.getNearPosition();
-            const distanceM = Math.sqrt(Math.pow(x, 2) + Math.pow(y, 2) + Math.pow(z, 2));
-            if (distanceM > 1000) {
+            const distanceM2 = x * x + y * y + z + z;
+            const thresholdM = 2 * c.mi.toKm * 1000;
+            if (distanceM2 > thresholdM * thresholdM) {
                 return;
             }
         }

@@ -17,3 +17,7 @@ export const m = {
 export const ft = {
     toM: 0.3048,
 };
+
+export const mi = {
+    toKm: 1.60934,
+};
