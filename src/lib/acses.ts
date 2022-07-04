@@ -307,7 +307,7 @@ export function create(
                 if (mode === AcsesModeType.Alert) {
                     brakes = AcsesBrake.None;
                     alarm = true;
-                } else if (accum.inForce instanceof StopSignalHazard && accum.inForce.penaltyCurveMps < 1) {
+                } else if (accum.inForce instanceof StopSignalHazard && accum.inForce.alertCurveMps < 1) {
                     const [, ack] = accum.mode;
                     brakes = AcsesBrake.PositiveStop;
                     alarm = !(aSpeedMps < c.stopSpeed && ack);
