@@ -312,6 +312,10 @@ const me = new FrpEngine(() => {
             accum => frp.snapshot(cabSignalFromMessage) ?? accum,
             () => me.rv.GetControlValue("LirrAspect", 0) as cs.LirrAspect
         ),
+        // It's important that our events only signal actual code changes.
+        fsm<undefined | cs.LirrAspect>(undefined),
+        frp.filter(([from, to]) => from !== to),
+        frp.map(([, to]) => to as cs.LirrAspect),
         frp.hub()
     );
     const cabSignalEvent$ = frp.compose(
