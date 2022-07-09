@@ -78,7 +78,7 @@ const downgradeEmergencyS = 21;
  * joystick.
  * @param coastOrBrake A behavior that indicates the master controller has been
  * placed into a braking or the coast position.
- * @param cutIn An event stream that indicates the state of the cut in control.
+ * @param cutIn An behavior that indicates the state of the cut in control.
  * @param hasPower A behavior that indicates the unit is powered and keyed in.
  * @returns An event stream that commmunicates all state for this system.
  */
@@ -87,14 +87,20 @@ export function create(
     cabAspect: frp.Stream<cs.LirrAspect>,
     acknowledge: frp.Behavior<boolean>,
     coastOrBrake: frp.Behavior<boolean>,
-    cutIn: frp.Stream<boolean>,
+    cutIn: frp.Behavior<boolean>,
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AscState> {
+    const isEngineWithKeyAndSettled = frp.liftN(
+        (engineWithKey, controlsSettled) => engineWithKey && controlsSettled,
+        e.isEngineWithKey,
+        e.areControlsSettled
+    );
     const cutInOut$ = frp.compose(
-        cutIn,
-        frp.filter(_ => frp.snapshot(e.isEngineWithKey)),
-        fsm(false),
-        frp.filter(([from, to]) => from !== to)
+        e.createUpdateStreamForBehavior(cutIn, isEngineWithKeyAndSettled),
+        fsm<undefined | boolean>(undefined),
+        // Cut in streams tend to start in false and then go to true, regardless
+        // of the control value settle delay, so ignore that first transition.
+        frp.filter(([from, to]) => from !== to && !(from === undefined && !to))
     );
     cutInOut$(([, to]) => {
         const msg = to ? "Enabled" : "Disabled";
@@ -103,7 +109,7 @@ export function create(
 
     const isActive = frp.liftN(
         (cutIn, hasPower, isPlayerEngine) => cutIn && hasPower && isPlayerEngine,
-        frp.stepper(cutIn, false),
+        cutIn,
         hasPower,
         e.isEngineWithKey
     );
@@ -115,9 +121,10 @@ export function create(
 
     const aSpeedMps = () => Math.abs(e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps;
     const accelMphS = () => e.rv.GetAcceleration() * c.mps.toMph;
-    const theCabAspect = frp.stepper(cabAspect, cs.LirrAspect.Speed15);
+    const theCabAspect = frp.stepper(cabAspect, undefined);
     const isOverspeed = frp.liftN(
-        (speedMps, cabAspect, active) => active && speedMps > toOverspeedSetpointMps(cabAspect),
+        (speedMps, cabAspect, active) =>
+            active && cabAspect !== undefined && speedMps > toOverspeedSetpointMps(cabAspect),
         aSpeedMps,
         theCabAspect,
         isActive
@@ -126,7 +133,10 @@ export function create(
         e.createUpdateStreamForBehavior(isOverspeed, isActive),
         fsm(false),
         frp.filter(([from, to]) => !from && to),
-        frp.map((_): AscEvent => [AscEventType.Overspeed, frp.snapshot(theCabAspect), frp.snapshot(aSpeedMps)])
+        frp.map((_): AscEvent => {
+            const theAspect = frp.snapshot(theCabAspect);
+            return [AscEventType.Overspeed, theAspect as cs.LirrAspect, frp.snapshot(aSpeedMps)];
+        })
     );
     const downgrade$ = frp.compose(
         cabAspect,
@@ -216,7 +226,9 @@ export function create(
                 // Clock update; move to another state if warranted, or trip
                 // the acknowledgement flag and add time to the stopwatch.
                 const [, initAspect, initSpeedMps, stopwatchS, ack] = accum;
-                const underSpeed = frp.snapshot(aSpeedMps) < toUnderspeedSetpointMps(frp.snapshot(theCabAspect));
+                const theAspect = frp.snapshot(theCabAspect);
+                const underSpeed =
+                    theAspect === undefined || frp.snapshot(aSpeedMps) < toUnderspeedSetpointMps(theAspect);
                 const acked = ack || frp.snapshot(acknowledge);
                 if (underSpeed && acked && frp.snapshot(coastOrBrake)) {
                     // Penalty acknowledged and we are under-speed.

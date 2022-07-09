@@ -52,21 +52,27 @@ const alarmS = 15;
  * @param e The player's engine.
  * @param input An event stream that represents the engineer's inputs to the
  * alerter.
- * @param cutIn An event stream that indicates the state of the cut in control.
+ * @param cutIn An behavior that indicates the state of the cut in control.
  * @param hasPower A behavior that indicates the unit is powered and keyed in.
  * @returns An event stream that commmunicates all state for this system.
  */
 export function create(
     e: FrpEngine,
     input: frp.Stream<AlerterInput>,
-    cutIn: frp.Stream<boolean>,
+    cutIn: frp.Behavior<boolean>,
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AlerterState> {
+    const isEngineWithKeyAndSettled = frp.liftN(
+        (engineWithKey, controlsSettled) => engineWithKey && controlsSettled,
+        e.isEngineWithKey,
+        e.areControlsSettled
+    );
     const cutInOut$ = frp.compose(
-        cutIn,
-        frp.filter(_ => frp.snapshot(e.isEngineWithKey)),
-        fsm(false),
-        frp.filter(([from, to]) => from !== to)
+        e.createUpdateStreamForBehavior(cutIn, isEngineWithKeyAndSettled),
+        fsm<undefined | boolean>(undefined),
+        // Cut in streams tend to start in false and then go to true, regardless
+        // of the control value settle delay, so ignore that first transition.
+        frp.filter(([from, to]) => from !== to && !(from === undefined && !to))
     );
     cutInOut$(([, to]) => {
         const msg = to ? "Enabled" : "Disabled";
@@ -75,7 +81,7 @@ export function create(
 
     const isActive = frp.liftN(
         (cutIn, hasPower, isPlayerEngine) => cutIn && hasPower && isPlayerEngine,
-        frp.stepper(cutIn, false),
+        cutIn,
         hasPower,
         e.isEngineWithKey
     );
