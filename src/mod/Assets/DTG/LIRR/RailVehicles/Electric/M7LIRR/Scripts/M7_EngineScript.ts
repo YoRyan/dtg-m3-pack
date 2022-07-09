@@ -103,7 +103,7 @@ const me = new FrpEngine(() => {
     const brakePipePsi = frp.stepper(brakePipePsi$, 0);
     const trueSpeedMps = () => me.rv.GetSpeed();
     const isTrueStopped = () => frp.snapshot(trueSpeedMps) < c.stopSpeed;
-    const authority = frp.stepper(me.createAuthorityStream(), VehicleAuthority.IsPlayer);
+    const authority$ = me.createAuthorityStream();
 
     // Event streams for the startup (Z) and emergency brake (Backspace)
     // controls
@@ -861,14 +861,6 @@ const me = new FrpEngine(() => {
     emergencyBrake$(bie => {
         me.rv.SetControlValue("EmergencyBrakesIndicator", 0, bie ? 1 : 0);
     });
-    const doorsOpen$ = me.createUpdateStreamForBehavior(
-        frp.liftN(
-            (leftOpen, rightOpen) => leftOpen || rightOpen,
-            () => (me.rv.GetControlValue("DoorsOpenCloseLeft", 0) as number) > 0.5,
-            () => (me.rv.GetControlValue("DoorsOpenCloseRight", 0) as number) > 0.5
-        )
-    );
-    doorsOpen$(open => me.rv.SetControlValue("DoorsState", 0, open ? 1 : 0));
 
     // Screens on/off
     hasPower$(power => me.rv.SetControlValue("ScreensOff", 0, !power ? 1 : 0));
@@ -891,7 +883,7 @@ const me = new FrpEngine(() => {
     ];
     const markerLights = [new rw.Light("Taillight_L"), new rw.Light("Taillight_R")];
     const headlights$ = frp.compose(
-        me.createAuthorityStream(),
+        authority$,
         frp.map(auth => {
             if (auth === VehicleAuthority.IsPlayer && me.eng.GetIsEngineWithKey()) {
                 const cv = me.rv.GetControlValue("Headlights", 0) as number;
@@ -923,7 +915,7 @@ const me = new FrpEngine(() => {
         }
     });
     const markers$ = frp.compose(
-        me.createAuthorityStream(),
+        authority$,
         frp.map(auth => {
             if (auth === VehicleAuthority.IsPlayer && me.eng.GetIsEngineWithKey()) {
                 const cv = me.rv.GetControlValue("Taillights", 0) as number;
@@ -950,6 +942,25 @@ const me = new FrpEngine(() => {
         light.Activate(false);
     }
 
+    // Doors open/close
+    const doorsOpen$ = me.createUpdateStreamForBehavior(
+        frp.liftN(
+            (leftOpen, rightOpen) => leftOpen || rightOpen,
+            () => (me.rv.GetControlValue("DoorsOpenCloseLeft", 0) as number) > 0.5,
+            () => (me.rv.GetControlValue("DoorsOpenCloseRight", 0) as number) > 0.5
+        )
+    );
+    const hallLights = [new rw.Light("HallLight_001"), new rw.Light("HallLight_002")];
+    doorsOpen$(open => {
+        me.rv.SetControlValue("DoorsState", 0, open ? 1 : 0);
+        for (const light of hallLights) {
+            light.Activate(open);
+        }
+    });
+    for (const light of hallLights) {
+        light.Activate(false);
+    }
+
     // Pantograph gate
     const pantoGate$ = frp.compose(
         me.createUpdateDeltaStream(),
@@ -972,30 +983,43 @@ const me = new FrpEngine(() => {
     cabLight.Activate(false);
 
     // Passenger cabin lights
-    const passLight = new rw.Light("RoomLight_PassView");
-    const passLightOn$ = frp.compose(
+    let exteriorPassLights: rw.Light[] = [];
+    for (let i = 1; i <= 9; i++) {
+        exteriorPassLights.push(new rw.Light(`RoomLight_0${i}`));
+    }
+    const interiorPassLight = new rw.Light("RoomLight_PassView");
+    const exteriorPassLightsOn = frp.compose(
+        authority$,
+        frp.map(auth => auth !== VehicleAuthority.IsAiParked)
+    );
+    const interiorPassLightOn = frp.compose(
         me.createCameraStream(),
         frp.map(vc => vc === VehicleCamera.Carriage)
     );
-    passLightOn$(on => passLight.Activate(on));
-    passLight.Activate(false);
+    exteriorPassLightsOn(on => {
+        for (const light of exteriorPassLights) {
+            light.Activate(on);
+        }
+    });
+    for (const light of exteriorPassLights) {
+        light.Activate(false);
+    }
+    interiorPassLightOn(on => interiorPassLight.Activate(on));
+    interiorPassLight.Activate(false);
 
     // Brake cylinder status lights
-    const brakeLight$ = me.createUpdateStreamForBehavior(
-        frp.liftN(
-            (authority, speedMps, brakeCylPsi) => {
-                if (authority === VehicleAuthority.IsPlayer) {
-                    return brakeCylPsi > 15 && speedMps < c.stopSpeed ? BrakeLight.Amber : BrakeLight.Green;
-                } else if (authority === VehicleAuthority.IsAiParked) {
-                    return BrakeLight.Amber;
-                } else {
-                    return speedMps < c.stopSpeed ? BrakeLight.Amber : BrakeLight.Green;
-                }
-            },
-            authority,
-            trueSpeedMps,
-            () => me.rv.GetControlValue("TrainBrakeCylinderPressurePSI", 0) as number
-        )
+    const brakeLight$ = frp.compose(
+        authority$,
+        frp.map(auth => {
+            if (auth === VehicleAuthority.IsPlayer) {
+                const brakeCylPsi = me.rv.GetControlValue("TrainBrakeCylinderPressurePSI", 0) as number;
+                return brakeCylPsi > 15 && frp.snapshot(isTrueStopped) ? BrakeLight.Amber : BrakeLight.Green;
+            } else if (auth === VehicleAuthority.IsAiParked) {
+                return BrakeLight.Amber;
+            } else {
+                return frp.snapshot(isTrueStopped) ? BrakeLight.Amber : BrakeLight.Green;
+            }
+        })
     );
     brakeLight$(status => {
         me.rv.ActivateNode("SL_green", status === BrakeLight.Green);
@@ -1004,21 +1028,19 @@ const me = new FrpEngine(() => {
     me.rv.ActivateNode("SL_blue", false);
 
     // Door open lights
-    const leftDoorOpen$ = me.createUpdateStreamForBehavior(
-        frp.liftN(
-            (authority, stopped, playerDoor) => (authority === VehicleAuthority.IsPlayer ? playerDoor : stopped),
-            authority,
-            isTrueStopped,
-            () => (me.rv.GetControlValue("DoorsOpenCloseLeft", 0) as number) > 0.5
-        )
+    const leftDoorOpen$ = frp.compose(
+        authority$,
+        frp.map(auth => {
+            const playerDoor = (me.rv.GetControlValue("DoorsOpenCloseLeft", 0) as number) > 0.5;
+            return auth === VehicleAuthority.IsPlayer ? playerDoor : frp.snapshot(isTrueStopped);
+        })
     );
-    const rightDoorOpen$ = me.createUpdateStreamForBehavior(
-        frp.liftN(
-            (authority, stopped, playerDoor) => (authority === VehicleAuthority.IsPlayer ? playerDoor : stopped),
-            authority,
-            isTrueStopped,
-            () => (me.rv.GetControlValue("DoorsOpenCloseRight", 0) as number) > 0.5
-        )
+    const rightDoorOpen$ = frp.compose(
+        authority$,
+        frp.map(auth => {
+            const playerDoor = (me.rv.GetControlValue("DoorsOpenCloseRight", 0) as number) > 0.5;
+            return auth === VehicleAuthority.IsPlayer ? playerDoor : frp.snapshot(isTrueStopped);
+        })
     );
     leftDoorOpen$(open => {
         me.rv.ActivateNode("SL_doors_L", open);
