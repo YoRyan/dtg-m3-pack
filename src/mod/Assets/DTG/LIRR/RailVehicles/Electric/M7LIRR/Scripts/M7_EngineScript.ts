@@ -946,6 +946,9 @@ const me = new FrpEngine(() => {
             light.Activate(setting);
         }
     });
+    for (const light of dimLights.concat(brightLights, markerLights)) {
+        light.Activate(false);
+    }
 
     // Pantograph gate
     const pantoGate$ = frp.compose(
