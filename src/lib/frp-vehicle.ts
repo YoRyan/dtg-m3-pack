@@ -78,45 +78,39 @@ export class FrpVehicle extends FrpEntity {
      * train.
      */
     public isPlayer: frp.Behavior<boolean> = () => this.rv.GetIsPlayer();
+    /**
+     * A behavior that returns true if the controls have settled after initial
+     * startup.
+     */
+    public areControlsSettled: frp.Behavior<boolean> = () =>
+        this.initTimeS === undefined ? false : this.e.GetSimulationTime() > this.initTimeS + 0.5;
 
+    private initTimeS: number | undefined = undefined;
     private onCvChangeSource = new FrpSource<ControlValueChange>();
     private consistMessageSource = new FrpQueuedSource<ConsistMessage>();
     private vehicleCameraSource = new FrpQueuedSource<VehicleCamera>();
 
     /**
      * Construct a new rail vehicle.
-     * @param onInitAndSettled The callback to run after the game has called
-     * Initialise(), and after the control values have settled to their initial
-     * values.
+     * @param onInit The callback to run after the game has called
+     * Initialise().
      */
-    constructor(onInitAndSettled: () => void) {
-        // Begin updates, wait 0.5 seconds for the controls to settle, then fire
-        // our callback.
+    constructor(onInit: () => void) {
         super(() => {
-            let done = false;
-            const initTimeS = 0.5;
-            this.activateUpdatesEveryFrame(true);
-            const wait$ = frp.compose(
-                this.createUpdateStream(() => !done),
-                fsm(0),
-                frp.filter(([from, to]) => from < initTimeS && to >= initTimeS)
-            );
-            wait$(_ => {
-                done = true;
-                this.activateUpdatesEveryFrame(false);
-                onInitAndSettled();
-                this.afterInitAndSettled();
-            });
+            onInit();
+            this.afterInit();
         });
     }
 
     /**
      * Create an event stream that fires for the OnControlValueChange()
      * callback.
+     * @param guard The stream will produce events as long as this behavior is
+     * true. Defaults to after the control values have settled.
      * @returns The new event stream.
      */
-    createOnCvChangeStream(): frp.Stream<ControlValueChange> {
-        return this.onCvChangeSource.createStream(this.always);
+    createOnCvChangeStream(guard = this.areControlsSettled): frp.Stream<ControlValueChange> {
+        return this.onCvChangeSource.createStream(guard);
     }
 
     /**
@@ -156,11 +150,13 @@ export class FrpVehicle extends FrpEntity {
      * callbacks.
      * @param name The name of the controlvalue.
      * @param index The index of the controlvalue, usually 0.
+     * @param guard The stream will produce events as long as this behavior is
+     * true. Defaults to after the control values have settled.
      * @returns The new stream of numbers.
      */
-    createGetCvStream(name: string, index: number): frp.Stream<number> {
+    createGetCvStream(name: string, index: number, guard = this.areControlsSettled): frp.Stream<number> {
         return frp.compose(
-            this.createUpdateStreamForBehavior(() => this.rv.GetControlValue(name, index), this.isPlayer),
+            this.createUpdateStreamForBehavior(() => this.rv.GetControlValue(name, index), guard),
             rejectUndefined()
         );
     }
@@ -170,11 +166,13 @@ export class FrpVehicle extends FrpEntity {
      * callback for a particular control.
      * @param name The name of the control.
      * @param index The index of the control, usually 0.
+     * @param guard The stream will produce events as long as this behavior is
+     * true. Defaults to after the control values have settled.
      * @returns The new stream of values.
      */
-    createOnCvChangeStreamFor(name: string, index: number): frp.Stream<number> {
+    createOnCvChangeStreamFor(name: string, index: number, guard = this.areControlsSettled): frp.Stream<number> {
         return frp.compose(
-            this.createOnCvChangeStream(),
+            this.createOnCvChangeStream(guard),
             frp.filter(([cvcName, cvcIndex]) => cvcName === name && cvcIndex === index),
             frp.map(([, , value]) => value)
         );
@@ -186,11 +184,17 @@ export class FrpVehicle extends FrpEntity {
      * can get to intercepting every possible change of the controlvalue.
      * @param name The name of the control.
      * @param index The index of the control, usually 0.
+     * @param guard The stream will produce events as long as this behavior is
+     * true.
      * @returns The new stream of values.
      */
-    createGetCvAndOnCvChangeStreamFor(name: string, index: number): frp.Stream<number> {
-        const onUpdate$ = this.createGetCvStream(name, index);
-        const onCvChange$ = this.createOnCvChangeStreamFor(name, index);
+    createGetCvAndOnCvChangeStreamFor(
+        name: string,
+        index: number,
+        guard = this.areControlsSettled
+    ): frp.Stream<number> {
+        const onUpdate$ = this.createGetCvStream(name, index, guard);
+        const onCvChange$ = this.createOnCvChangeStreamFor(name, index, guard);
         return frp.merge<number, number>(onCvChange$)(onUpdate$);
     }
 
@@ -237,6 +241,31 @@ export class FrpVehicle extends FrpEntity {
         );
     }
 
+    /**
+     * Like the ordinary fold(), except this version takes a behavior that
+     * returns the initial value, and does not produce events until the
+     * controls have settled.
+     */
+    foldAfterSettled<TAccum, TValue>(
+        step: (accumulated: TAccum, value: TValue) => TAccum,
+        initial: frp.Behavior<TAccum>
+    ): (eventStream: frp.Stream<TValue>) => frp.Stream<TAccum> {
+        return eventStream => {
+            return next => {
+                let accumulated = frp.snapshot(initial);
+                let firstRead = false;
+                eventStream(value => {
+                    if (frp.snapshot(this.areControlsSettled) && firstRead) {
+                        next((accumulated = step(accumulated, value)));
+                    } else {
+                        accumulated = frp.snapshot(initial);
+                        firstRead = true;
+                    }
+                });
+            };
+        };
+    }
+
     setup() {
         super.setup();
 
@@ -263,7 +292,8 @@ export class FrpVehicle extends FrpEntity {
         };
     }
 
-    protected afterInitAndSettled() {
+    protected afterInit() {
+        this.initTimeS = this.e.GetSimulationTime();
         this.consistMessageSource.flush();
         this.vehicleCameraSource.flush();
     }

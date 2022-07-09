@@ -34,8 +34,8 @@ export class FrpEngine extends FrpVehicle {
         };
     }
 
-    protected afterInitAndSettled() {
-        super.afterInitAndSettled();
+    protected afterInit() {
+        super.afterInit();
 
         this.signalMessageSource.flush();
     }
