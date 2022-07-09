@@ -122,6 +122,12 @@ export function create(
     const aSpeedMps = () => Math.abs(e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps;
     const accelMphS = () => e.rv.GetAcceleration() * c.mps.toMph;
     const theCabAspect = frp.stepper(cabAspect, undefined);
+
+    const isBrakeAssurance = (aspect: cs.LirrAspect, speedMps: number) => {
+        const rateMphS = toBrakeAssuranceRateMphS(aspect, speedMps);
+        return rateMphS !== undefined ? frp.snapshot(accelMphS) < rateMphS : undefined;
+    };
+
     const isOverspeed = frp.liftN(
         (speedMps, cabAspect, active) =>
             active && cabAspect !== undefined && speedMps > toOverspeedSetpointMps(cabAspect),
@@ -236,13 +242,9 @@ export function create(
                 }
 
                 // Brake assurance rate check
-                const brakeAssuranceRateMphS = toBrakeAssuranceRateMphS(initAspect, initSpeedMps);
                 const brakeAssuranceTimeS = toBrakeAssuranceTimeS(initAspect, initSpeedMps);
-                const isBrakeAssurance =
-                    brakeAssuranceRateMphS !== undefined
-                        ? frp.snapshot(accelMphS) < brakeAssuranceRateMphS || stopped
-                        : true;
-                if (brakeAssuranceTimeS !== undefined && stopwatchS > brakeAssuranceTimeS && !isBrakeAssurance) {
+                const brakeAssurance = isBrakeAssurance(initAspect, initSpeedMps) ?? true;
+                if (brakeAssuranceTimeS !== undefined && stopwatchS > brakeAssuranceTimeS && !brakeAssurance) {
                     // Brake assurance timer has elapsed; apply emergency
                     // braking.
                     return AscMode.Emergency;
@@ -260,7 +262,11 @@ export function create(
                     alarm: false,
                     overspeed: false,
                     atcForestall: false,
-                    brakeAssurance: false,
+                    brakeAssurance:
+                        isBrakeAssurance(
+                            frp.snapshot(theCabAspect) ?? cs.LirrAspect.Speed15,
+                            frp.snapshot(aSpeedMps)
+                        ) ?? false,
                 };
             }
 
@@ -291,22 +297,24 @@ export function create(
                     alarm: true,
                     overspeed: false,
                     atcForestall: false,
-                    brakeAssurance: false,
+                    brakeAssurance:
+                        isBrakeAssurance(
+                            frp.snapshot(theCabAspect) ?? cs.LirrAspect.Speed15,
+                            frp.snapshot(aSpeedMps)
+                        ) ?? false,
                 };
             }
 
             // Overspeed state
             const [, initAspect, initSpeedMps, , ack] = accum;
-            const brakeAssuranceRateMphS = toBrakeAssuranceRateMphS(initAspect, initSpeedMps);
-            const isBrakeAssurance =
-                brakeAssuranceRateMphS !== undefined ? frp.snapshot(accelMphS) < brakeAssuranceRateMphS : true;
-            const satisfied = isBrakeAssurance && ack && frp.snapshot(coastOrBrake);
+            const brakeAssurance = isBrakeAssurance(initAspect, initSpeedMps);
+            const satisfied = (brakeAssurance ?? true) && ack && frp.snapshot(coastOrBrake);
             return {
                 brakes: AscBrake.Penalty,
                 alarm: !satisfied,
                 overspeed: frp.snapshot(aSpeedMps) > toUnderspeedSetpointMps(initAspect),
-                atcForestall: satisfied,
-                brakeAssurance: isBrakeAssurance,
+                atcForestall: !(brakeAssurance ?? false),
+                brakeAssurance: brakeAssurance ?? false,
             };
         })
     );
