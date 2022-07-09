@@ -209,7 +209,8 @@ export class FrpVehicle extends FrpEntity {
         return frp.compose(
             this.createUpdateStream(),
             frp.fold<CouplingsAccum, number>((accum, t) => {
-                if (accum === undefined || t > accum.nextUpdateS) {
+                // AI trains don't couple, so we don't need to probe them again.
+                if (accum === undefined || (t > accum.nextUpdateS && this.rv.GetIsPlayer())) {
                     const nextUpdateS = t + Math.random() * maxCouplingUpdateS;
                     const sensed: VehicleCouplings = [
                         this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Forward),
