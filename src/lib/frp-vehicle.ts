@@ -6,8 +6,6 @@ import { FrpEntity, FrpSource } from "./frp-entity";
 import { fsm, rejectUndefined } from "./frp-extra";
 import * as rw from "./railworks";
 
-const coupleSenseMessage: [message: number, argument: string] = [10001, ""];
-
 /**
  * Indicates whether the rail vehicle's front and/or rear couplers are engaged.
  */
@@ -63,6 +61,10 @@ enum SensedDirection {
     None,
     Forward,
 }
+
+type CouplingsAccum = undefined | { nextUpdateS: number; sensed: VehicleCouplings };
+const coupleSenseMessage: [message: number, argument: string] = [10001, ""];
+const maxCouplingUpdateS = 5;
 
 /**
  * A rail vehicle is a scripted entity that has control values, a physics
@@ -204,11 +206,21 @@ export class FrpVehicle extends FrpEntity {
      * @returns The new event stream.
      */
     createCouplingsStream(): frp.Stream<VehicleCouplings> {
-        return this.createUpdateStreamForBehavior(
-            (): VehicleCouplings => [
-                this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Forward),
-                this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Backward),
-            ]
+        return frp.compose(
+            this.createUpdateStream(),
+            frp.fold<CouplingsAccum, number>((accum, t) => {
+                if (accum === undefined || t > accum.nextUpdateS) {
+                    const nextUpdateS = t + Math.random() * maxCouplingUpdateS;
+                    const sensed: VehicleCouplings = [
+                        this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Forward),
+                        this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Backward),
+                    ];
+                    return { nextUpdateS, sensed };
+                } else {
+                    return accum;
+                }
+            }, undefined),
+            frp.map(accum => accum?.sensed ?? [false, false])
         );
     }
 
