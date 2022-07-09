@@ -101,8 +101,7 @@ const me = new FrpEngine(() => {
     const speedoMph = frp.stepper(speedoMph$, 0);
     const brakePipePsi$ = me.createGetCvStream("AirBrakePipePressurePSI", 0);
     const brakePipePsi = frp.stepper(brakePipePsi$, 0);
-    const trueSpeedMps = () => me.rv.GetSpeed();
-    const isTrueStopped = () => frp.snapshot(trueSpeedMps) < c.stopSpeed;
+    const isTrueStopped = () => Math.abs(me.rv.GetSpeed()) < c.stopSpeed;
     const authority$ = me.createAuthorityStream();
 
     // Event streams for the startup (Z) and emergency brake (Backspace)
@@ -1017,7 +1016,13 @@ const me = new FrpEngine(() => {
         frp.map(auth => {
             if (auth === VehicleAuthority.IsPlayer) {
                 const brakeCylPsi = me.rv.GetControlValue("TrainBrakeCylinderPressurePSI", 0) as number;
-                return brakeCylPsi > 15 && frp.snapshot(isTrueStopped) ? BrakeLight.Amber : BrakeLight.Green;
+                if (brakeCylPsi > 34) {
+                    return BrakeLight.Amber;
+                } else if (brakeCylPsi > 11) {
+                    return BrakeLight.Dark;
+                } else {
+                    return BrakeLight.Green;
+                }
             } else if (auth === VehicleAuthority.IsAiParked) {
                 return BrakeLight.Amber;
             } else {
