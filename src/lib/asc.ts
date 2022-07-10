@@ -100,7 +100,8 @@ export function create(
     const theCabAspect = frp.stepper(cabAspect, undefined);
     const isBrakeAssurance = (aspect: cs.LirrAspect, speedMps: number) => {
         const rateMps2 = toBrakeAssuranceRateMps2(aspect, speedMps);
-        return rateMps2 !== undefined ? e.rv.GetAcceleration() < rateMps2 : undefined;
+        const accelMps2 = e.rv.GetAcceleration() * (e.rv.GetSpeed() > 0 ? 1 : -1);
+        return rateMps2 !== undefined ? accelMps2 < rateMps2 : undefined;
     };
 
     const isOverspeed = frp.liftN(
