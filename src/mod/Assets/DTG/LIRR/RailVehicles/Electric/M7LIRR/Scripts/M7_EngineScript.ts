@@ -1173,12 +1173,8 @@ const me = new FrpEngine(() => {
         nextDest$
     );
 
-    // Air conditioning sounds
-    hasPower$(power => {
-        me.rv.SetControlValue("FanSound", 0, power ? 1 : 0);
-        me.rv.SetControlValue("AuxMotors", 0, power ? 1 : 0);
-        me.rv.SetControlValue("CompressorState", 0, power ? 1 : 0);
-    });
+    // Ambient sounds (HVAC, etc.)
+    me.rv.SetControlValue("AmbientSound", 0, 1);
 
     // Master controller and reverser positions default to coast and neutral,
     // which isn't allowed by the initial interlocking state. Mute clicks for
