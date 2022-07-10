@@ -812,7 +812,9 @@ const me = new FrpEngine(() => {
                     }
                 }
             },
-            () => me.rv.GetControlValue("TrainBrakeControl", 0) as number
+            // TrainBrakeControl refuses to cooperate in a save/resume, so just
+            // default to no brakes.
+            () => 0
         ),
         frp.hub()
     );
