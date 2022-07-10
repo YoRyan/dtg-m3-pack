@@ -11,7 +11,7 @@ import * as cs from "./cabsignals";
 import * as c from "./constants";
 import * as frp from "./frp";
 import { FrpEngine } from "./frp-engine";
-import { fsm } from "./frp-extra";
+import { fsm, mapBehavior } from "./frp-extra";
 import * as rw from "./railworks";
 
 export type AscState = {
@@ -55,12 +55,10 @@ enum AscMode {
 
 type AscEvent =
     | [type: AscEventType.Update, deltaS: number]
-    | AscEventType.Reset
     | [type: AscEventType.Overspeed, initAspect: cs.LirrAspect, initSpeedMps: number]
     | AscEventType.Downgrade;
 enum AscEventType {
     Update,
-    Reset,
     Downgrade,
     Overspeed,
 }
@@ -90,13 +88,10 @@ export function create(
     cutIn: frp.Behavior<boolean>,
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AscState> {
-    const isEngineWithKeyAndSettled = frp.liftN(
-        (engineWithKey, controlsSettled) => engineWithKey && controlsSettled,
-        e.isEngineWithKey,
-        e.areControlsSettled
-    );
     const cutInOut$ = frp.compose(
-        e.createUpdateStreamForBehavior(cutIn, isEngineWithKeyAndSettled),
+        e.playerUpdateWithKey$,
+        frp.filter(_ => frp.snapshot(e.areControlsSettled)),
+        mapBehavior(cutIn),
         fsm<undefined | boolean>(undefined),
         // Cut in streams tend to start in false and then go to true, regardless
         // of the control value settle delay, so ignore that first transition.
@@ -107,36 +102,25 @@ export function create(
         rw.ScenarioManager.ShowAlertMessageExt("ASC Signal Speed Enforcement", msg, popupS, "");
     });
 
-    const isActive = frp.liftN(
-        (cutIn, hasPower, isPlayerEngine) => cutIn && hasPower && isPlayerEngine,
-        cutIn,
-        hasPower,
-        e.isEngineWithKey
-    );
-    const reset$ = frp.compose(
-        e.createUpdateStreamForBehavior(isActive, e.isEngineWithKey),
-        frp.filter(active => !active),
-        frp.map((_): AscEvent => AscEventType.Reset)
-    );
-
+    const isActive = frp.liftN((cutIn, hasPower) => cutIn && hasPower, cutIn, hasPower);
     const aSpeedMps = () => Math.abs(e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps;
     const accelMphS = () => e.rv.GetAcceleration() * c.mps.toMph;
     const theCabAspect = frp.stepper(cabAspect, undefined);
-
     const isBrakeAssurance = (aspect: cs.LirrAspect, speedMps: number) => {
         const rateMphS = toBrakeAssuranceRateMphS(aspect, speedMps);
         return rateMphS !== undefined ? frp.snapshot(accelMphS) < rateMphS : undefined;
     };
 
     const isOverspeed = frp.liftN(
-        (speedMps, cabAspect, active) =>
-            active && cabAspect !== undefined && speedMps > toOverspeedSetpointMps(cabAspect),
+        (isActive, speedMps, cabAspect) =>
+            isActive && cabAspect !== undefined && speedMps > toOverspeedSetpointMps(cabAspect),
+        isActive,
         aSpeedMps,
-        theCabAspect,
-        isActive
+        theCabAspect
     );
     const overspeed$ = frp.compose(
-        e.createUpdateStreamForBehavior(isOverspeed, isActive),
+        e.playerUpdateWithKey$,
+        mapBehavior(isOverspeed),
         fsm(false),
         frp.filter(([from, to]) => !from && to),
         frp.map((_): AscEvent => {
@@ -144,21 +128,22 @@ export function create(
             return [AscEventType.Overspeed, theAspect as cs.LirrAspect, frp.snapshot(aSpeedMps)];
         })
     );
+
     const downgrade$ = frp.compose(
         cabAspect,
         fsm(cs.LirrAspect.Speed15),
         frp.filter(([from, to]) => (to as number) < (from as number)),
+        frp.filter(_ => frp.snapshot(isActive)),
         frp.map((_): AscEvent => AscEventType.Downgrade)
     );
+
     return frp.compose(
-        e.createUpdateDeltaStream(isActive),
-        frp.map((dt): AscEvent => [AscEventType.Update, dt]),
-        frp.merge(reset$),
+        e.playerUpdateWithKey$,
+        frp.map((pu): AscEvent => [AscEventType.Update, pu.dt]),
         frp.merge(overspeed$),
         frp.merge(downgrade$),
         frp.fold<AscAccum, AscEvent>((accum, event) => {
-            // Handle reset events (and other events while in the inactive state).
-            if (!frp.snapshot(isActive) || event === AscEventType.Reset) {
+            if (!frp.snapshot(isActive)) {
                 return AscMode.Normal;
             }
 

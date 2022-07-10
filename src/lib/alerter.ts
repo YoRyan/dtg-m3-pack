@@ -5,7 +5,7 @@
 
 import * as frp from "./frp";
 import { FrpEngine } from "./frp-engine";
-import { fsm } from "./frp-extra";
+import { fsm, mapBehavior } from "./frp-extra";
 import { VehicleCamera } from "./frp-vehicle";
 import * as rw from "./railworks";
 
@@ -37,10 +37,9 @@ enum AlerterMode {
     Penalty,
 }
 
-type AlerterEvent = [type: AlerterEventType.Update, deltaS: number] | AlerterEventType.Reset | AlerterInput;
+type AlerterEvent = [type: AlerterEventType.Update, deltaS: number] | AlerterInput;
 enum AlerterEventType {
     Update,
-    Reset,
 }
 
 const popupS = 5;
@@ -62,13 +61,10 @@ export function create(
     cutIn: frp.Behavior<boolean>,
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AlerterState> {
-    const isEngineWithKeyAndSettled = frp.liftN(
-        (engineWithKey, controlsSettled) => engineWithKey && controlsSettled,
-        e.isEngineWithKey,
-        e.areControlsSettled
-    );
     const cutInOut$ = frp.compose(
-        e.createUpdateStreamForBehavior(cutIn, isEngineWithKeyAndSettled),
+        e.playerUpdateWithKey$,
+        frp.filter(_ => frp.snapshot(e.areControlsSettled)),
+        mapBehavior(cutIn),
         fsm<undefined | boolean>(undefined),
         // Cut in streams tend to start in false and then go to true, regardless
         // of the control value settle delay, so ignore that first transition.
@@ -79,19 +75,7 @@ export function create(
         rw.ScenarioManager.ShowAlertMessageExt("ALE Vigilance System", msg, popupS, "");
     });
 
-    const isActive = frp.liftN(
-        (cutIn, hasPower, isPlayerEngine) => cutIn && hasPower && isPlayerEngine,
-        cutIn,
-        hasPower,
-        e.isEngineWithKey
-    );
-    const reset$ = frp.compose(
-        e.createUpdateStreamForBehavior(isActive, e.isEngineWithKey),
-        frp.filter(active => !active),
-        frp.map((_): AlerterEvent => AlerterEventType.Reset)
-    );
-
-    const camera = frp.stepper(e.createCameraStream(), VehicleCamera.FrontCab);
+    const camera = frp.stepper(e.vehicleCamera$, VehicleCamera.FrontCab);
     const isExteriorCamera = () => {
         switch (frp.snapshot(camera)) {
             case VehicleCamera.FrontCab:
@@ -101,15 +85,14 @@ export function create(
                 return true;
         }
     };
+
     const accumStart: AlerterAccum = [AlerterMode.Countdown, countdownS];
     return frp.compose(
-        e.createUpdateDeltaStream(isActive),
-        frp.map((dt): AlerterEvent => [AlerterEventType.Update, dt]),
+        e.playerUpdateWithKey$,
+        frp.map((pu): AlerterEvent => [AlerterEventType.Update, pu.dt]),
         frp.merge(input),
-        frp.merge(reset$),
         frp.fold<AlerterAccum, AlerterEvent>((accum, event) => {
-            // Handle reset events (and other events while in the inactive state).
-            if (!frp.snapshot(isActive) || event === AlerterEventType.Reset) {
+            if (!(frp.snapshot(cutIn) && frp.snapshot(hasPower))) {
                 return accumStart;
             }
 

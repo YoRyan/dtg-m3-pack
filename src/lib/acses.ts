@@ -7,7 +7,8 @@ import * as cs from "./cabsignals";
 import * as c from "./constants";
 import * as frp from "./frp";
 import { FrpEngine } from "./frp-engine";
-import { fsm, rejectUndefined } from "./frp-extra";
+import { fsm, mapBehavior, rejectUndefined } from "./frp-extra";
+import { PlayerUpdate } from "./frp-vehicle";
 import * as rw from "./railworks";
 
 export type AcsesState = { brakes: AcsesBrake; alarm: boolean; overspeed: boolean; trackSpeed: AcsesTrack };
@@ -45,10 +46,9 @@ enum AcsesModeType {
     Penalty,
 }
 
-type AcsesEvent = [type: AcsesEventType.Update, deltaS: number] | AcsesEventType.Reset | AcsesEventType.Downgrade;
+type AcsesEvent = [type: AcsesEventType.Update, deltaS: number] | AcsesEventType.Downgrade;
 enum AcsesEventType {
     Update,
-    Reset,
     Downgrade,
 }
 
@@ -93,13 +93,10 @@ export function create(
     cutIn: frp.Behavior<boolean>,
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AcsesState> {
-    const isEngineWithKeyAndSettled = frp.liftN(
-        (engineWithKey, controlsSettled) => engineWithKey && controlsSettled,
-        e.isEngineWithKey,
-        e.areControlsSettled
-    );
     const cutInOut$ = frp.compose(
-        e.createUpdateStreamForBehavior(cutIn, isEngineWithKeyAndSettled),
+        e.playerUpdateWithKey$,
+        frp.filter(_ => frp.snapshot(e.areControlsSettled)),
+        mapBehavior(cutIn),
         fsm<undefined | boolean>(undefined),
         // Cut in streams tend to start in false and then go to true, regardless
         // of the control value settle delay, so ignore that first transition.
@@ -110,34 +107,30 @@ export function create(
         rw.ScenarioManager.ShowAlertMessageExt("ACSES Track Speed Enforcement", msg, popupS, "");
     });
 
-    const isActive = frp.liftN(
-        (cutIn, hasPower, isPlayerEngine) => cutIn && hasPower && isPlayerEngine,
-        cutIn,
-        hasPower,
-        e.isEngineWithKey
-    );
-    const reset$ = frp.compose(
-        e.createUpdateStreamForBehavior(isActive, e.isEngineWithKey),
-        frp.filter(active => !active),
-        frp.map((_): AcsesEvent => AcsesEventType.Reset)
-    );
-
+    const isActive = frp.liftN((cutIn, hasPower) => cutIn && hasPower, cutIn, hasPower);
+    const isInactive = frp.liftN(isActive => !isActive, isActive);
     const speedMps = () => (e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps;
 
     const pts$ = frp.compose(
-        e.createOnCustomSignalMessageStream(),
+        e.customSignalMessage$,
         frp.map(msg => cs.toPositiveStopDistanceM(msg)),
         rejectUndefined()
     );
     const pts = frp.stepper(pts$, false);
 
     const speedPostIndex$ = frp.compose(
-        createSpeedPostsStream(e, isActive),
-        indexObjectsSensedByDistance(reset$),
+        e.playerUpdateWithKey$,
+        mapSpeedPostsStream(e),
+        indexObjectsSensedByDistance(isInactive),
         frp.hub()
     );
-    const signalIndex$ = frp.compose(createSignalStream(e, isActive), indexObjectsSensedByDistance(reset$));
     const speedPostIndex = frp.stepper(speedPostIndex$, new Map<number, Sensed<SpeedPost>>());
+
+    const signalIndex$ = frp.compose(
+        e.playerUpdateWithKey$,
+        mapSignalStream(e),
+        indexObjectsSensedByDistance(isInactive)
+    );
     const signalIndex = frp.stepper(signalIndex$, new Map<number, Sensed<Signal>>());
 
     const trackSpeedMps$ = frp.compose(
@@ -145,7 +138,7 @@ export function create(
         createTrackSpeedStream(
             () => e.rv.GetCurrentSpeedLimit()[0],
             () => e.rv.GetConsistLength(),
-            reset$
+            isInactive
         ),
         frp.hub()
     );
@@ -215,13 +208,11 @@ export function create(
         trackSpeed: AcsesSpeed.CutOut,
     };
     return frp.compose(
-        e.createUpdateDeltaStream(isActive),
-        frp.map((dt): AcsesEvent => [AcsesEventType.Update, dt]),
-        frp.merge(reset$),
+        e.playerUpdateWithKey$,
+        frp.map((pu): AcsesEvent => [AcsesEventType.Update, pu.dt]),
         frp.merge(trackSpeedDowngrade$),
         frp.fold<AcsesAccum, AcsesEvent>((accum, event) => {
-            // Handle reset events (and other events while in the inactive state).
-            if (!frp.snapshot(isActive) || event === AcsesEventType.Reset) {
+            if (!frp.snapshot(isActive)) {
                 return accumStart;
             }
 
@@ -336,30 +327,31 @@ export function create(
 /**
  * Create a continuous stream of searches for speed limit changes.
  * @param e The rail vehicle to sense objects with.
- * @param update Searches will only be conducted while this behavior is true.
  * @returns The new event stream of speed post readings.
  */
-function createSpeedPostsStream(e: FrpEngine, update: frp.Behavior<boolean>): frp.Stream<Reading<SpeedPost>> {
+function mapSpeedPostsStream(e: FrpEngine): (eventStream: frp.Stream<PlayerUpdate>) => frp.Stream<Reading<SpeedPost>> {
     const nLimits = 3;
-    return frp.compose(
-        e.createUpdateDeltaStream(update),
-        frp.map(dt => {
-            const speedMpS = e.rv.GetSpeed(); // Must be as precise as possible.
-            const traveledM = speedMpS * dt;
-            let posts: Sensed<SpeedPost>[] = [];
-            for (const [distanceM, post] of iterateSpeedLimitsBackward(e, nLimits)) {
-                if (post.speedMps < hugeSpeed) {
-                    posts.push([-distanceM, post]);
+    return eventStream => {
+        return frp.compose(
+            eventStream,
+            frp.map(pu => {
+                const speedMpS = e.rv.GetSpeed(); // Must be as precise as possible.
+                const traveledM = speedMpS * pu.dt;
+                let posts: Sensed<SpeedPost>[] = [];
+                for (const [distanceM, post] of iterateSpeedLimitsBackward(e, nLimits)) {
+                    if (post.speedMps < hugeSpeed) {
+                        posts.push([-distanceM, post]);
+                    }
                 }
-            }
-            for (const [distanceM, post] of iterateSpeedLimitsForward(e, nLimits)) {
-                if (post.speedMps < hugeSpeed) {
-                    posts.push([distanceM, post]);
+                for (const [distanceM, post] of iterateSpeedLimitsForward(e, nLimits)) {
+                    if (post.speedMps < hugeSpeed) {
+                        posts.push([distanceM, post]);
+                    }
                 }
-            }
-            return [traveledM, posts];
-        })
-    );
+                return [traveledM, posts];
+            })
+        );
+    };
 }
 
 function iterateSpeedLimitsForward(e: FrpEngine, nLimits: number): Sensed<SpeedPost>[] {
@@ -395,24 +387,25 @@ function iterateSpeedLimits(
 /**
  * Create a continuous stream of searches for restrictive signals.
  * @param e The rail vehicle to sense objects with.
- * @param update Searches will only be conducted while this behavior is true.
  * @returns The new event stream of signal readings.
  */
-function createSignalStream(e: FrpEngine, update: frp.Behavior<boolean>): frp.Stream<Reading<Signal>> {
+function mapSignalStream(e: FrpEngine): (eventStream: frp.Stream<PlayerUpdate>) => frp.Stream<Reading<Signal>> {
     const nSignals = 3;
-    return frp.compose(
-        e.createUpdateDeltaStream(update),
-        frp.map(dt => {
-            const speedMpS = e.rv.GetSpeed(); // Must be as precise as possible.
-            const traveledM = speedMpS * dt;
-            let signals: Sensed<Signal>[] = [];
-            for (const [distanceM, signal] of iterateSignalsBackward(e, nSignals)) {
-                signals.push([-distanceM, signal]);
-            }
-            signals.push(...iterateSignalsForward(e, nSignals));
-            return [traveledM, signals];
-        })
-    );
+    return eventStream => {
+        return frp.compose(
+            eventStream,
+            frp.map(pu => {
+                const speedMpS = e.rv.GetSpeed(); // Must be as precise as possible.
+                const traveledM = speedMpS * pu.dt;
+                let signals: Sensed<Signal>[] = [];
+                for (const [distanceM, signal] of iterateSignalsBackward(e, nSignals)) {
+                    signals.push([-distanceM, signal]);
+                }
+                signals.push(...iterateSignalsForward(e, nSignals));
+                return [traveledM, signals];
+            })
+        );
+    };
 }
 
 function iterateSignalsForward(e: FrpEngine, nSignals: number): Sensed<Signal>[] {
@@ -453,27 +446,21 @@ function iterateRestrictiveSignals(
  * restriction.
  * @param consistLengthM A behavior to obtain the length of the player's
  * consist.
- * @param reset An event stream that can be used to reset this tracker.
+ * @param reset A behavior that can be used to reset this tracker.
  * @returns The new event stream of track speed in m/s.
  */
 function createTrackSpeedStream(
     gameTrackSpeedLimitMps: frp.Behavior<number>,
     consistLengthM: frp.Behavior<number>,
-    reset: frp.Stream<any>
+    reset: frp.Behavior<boolean>
 ): (eventStream: frp.Stream<Map<number, Sensed<SpeedPost>>>) => frp.Stream<number> {
     return indexStream => {
-        const reset$ = frp.compose(
-            reset,
-            frp.map(_ => undefined)
-        );
         const twoSidedPosts = frp.stepper(trackSpeedPostSpeeds(indexStream), new Map<number, TwoSidedSpeedPost>());
         return frp.compose(
             indexStream,
-            frp.merge(reset$),
-            frp.fold<number, undefined | Map<number, Sensed<SpeedPost>>>(
+            frp.fold<number, Map<number, Sensed<SpeedPost>>>(
                 (accum, index) => {
-                    // Reset event
-                    if (index === undefined) {
+                    if (frp.snapshot(reset)) {
                         return 0;
                     }
 
@@ -561,19 +548,15 @@ const trackSpeedPostSpeeds = frp.fold<Map<number, TwoSidedSpeedPost>, Map<number
  * d < 0|invisible|d > 0
  * ---->|_________|<----
  *
- * @param reset An event stream that can be used to reset this tracker.
+ * @param reset A behavior that can be used to reset this tracker.
  * @returns An stream of mappings from unique identifier to sensed object.
  */
 function indexObjectsSensedByDistance<T>(
-    reset: frp.Stream<any>
+    reset: frp.Behavior<boolean>
 ): (eventStream: frp.Stream<Reading<T>>) => frp.Stream<Map<number, Sensed<T>>> {
     const maxPassingM = 28.5; // 1.1*85 ft
     const senseMarginM = 4;
     return eventStream => {
-        const reset$ = frp.compose(
-            reset,
-            frp.map(_ => undefined)
-        );
         const accumStart: ObjectIndexAccum<T> = {
             counter: -1,
             sensed: new Map(),
@@ -581,10 +564,8 @@ function indexObjectsSensedByDistance<T>(
         };
         return frp.compose(
             eventStream,
-            frp.merge(reset$),
-            frp.fold<ObjectIndexAccum<T>, undefined | Reading<T>>((accum, reading) => {
-                // Reset event
-                if (reading === undefined) {
+            frp.fold<ObjectIndexAccum<T>, Reading<T>>((accum, reading) => {
+                if (frp.snapshot(reset)) {
                     return accumStart;
                 }
 

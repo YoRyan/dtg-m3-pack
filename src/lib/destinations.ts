@@ -81,8 +81,11 @@ export function setup(v: FrpVehicle, destinations: Destination[], previous: frp.
         sendDestinationChar(v, char);
     });
     // Handle consist messages.
-    const consistMessage$ = v.createOnConsistMessageStreamFor(destinationMessageId);
-    consistMessage$(([content, dir]) => {
+    const consistMessage$ = frp.compose(
+        v.consistMessage$,
+        frp.filter(([id]) => id === destinationMessageId)
+    );
+    consistMessage$(([, content, dir]) => {
         setMyDestinationChar(v, content);
         v.rv.SendConsistMessage(destinationMessageId, content, dir);
     });

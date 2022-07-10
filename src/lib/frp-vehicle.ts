@@ -2,8 +2,8 @@
 
 import * as c from "./constants";
 import * as frp from "./frp";
-import { FrpEntity, FrpSource } from "./frp-entity";
-import { fsm, rejectUndefined } from "./frp-extra";
+import { FrpEntity } from "./frp-entity";
+import { rejectUndefined } from "./frp-extra";
 import * as rw from "./railworks";
 
 /**
@@ -11,28 +11,39 @@ import * as rw from "./railworks";
  */
 export type VehicleCouplings = [front: boolean, rear: boolean];
 
-/**
- * Indicates whether the rail vehicle is controlled by the player or by the AI.
- */
-export enum VehicleAuthority {
+export type VehicleDoors = [left: boolean, right: boolean];
+
+export type PlayerUpdate = {
+    dt: number;
+    speedMps: number;
+    isStopped: boolean;
+    couplings: VehicleCouplings;
+    doorsOpen: VehicleDoors;
+};
+
+export type AiUpdate = {
+    dt: number;
+    speedMps: number;
+    isStopped: boolean;
+    direction: SensedDirection;
+    couplings: VehicleCouplings;
+};
+
+export enum SensedDirection {
     /**
-     * This rail vehicle is part of the player train.
+     * This rail vehicle is is moving in the reverse direction (unless it is
+     * flipped, in which case it is moving forward).
      */
-    IsPlayer,
+    Backward,
     /**
-     * This rail vehicle is part of an AI train that has not moved.
+     * This rail vehicle has not moved.
      */
-    IsAiParked,
+    None,
     /**
-     * This rail vehicle is part of an AI train and it is moving in the forward
-     * direction (unless it is flipped, in which case it is reversing).
+     * This rail vehicle is moving in the forward direction (unless it is
+     * flipped, in which case it is reversing).
      */
-    IsAiMovingForward,
-    /**
-     * This rail vehicle is part of an AI train and it is moving in the reverse
-     * direction (unless it is flipped, in which case it is moving forward).
-     */
-    IsAiMovingBackward,
+    Forward,
 }
 
 /**
@@ -56,15 +67,8 @@ export enum VehicleCamera {
     RearCab,
 }
 
-enum SensedDirection {
-    Backward,
-    None,
-    Forward,
-}
-
-type CouplingsAccum = undefined | { nextUpdateS: number; sensed: VehicleCouplings };
 const coupleSenseMessage: [message: number, argument: string] = [10001, ""];
-const maxCouplingUpdateS = 5;
+const maxCouplingUpdateS = 3;
 
 /**
  * A rail vehicle is a scripted entity that has control values, a physics
@@ -76,21 +80,28 @@ export class FrpVehicle extends FrpEntity {
      */
     public rv = new rw.RailVehicle("");
     /**
-     * A behavior that returns true if this vehicle is part of the player
-     * train.
-     */
-    public isPlayer: frp.Behavior<boolean> = () => this.rv.GetIsPlayer();
-    /**
      * A behavior that returns true if the controls have settled after initial
      * startup.
      */
     public areControlsSettled: frp.Behavior<boolean> = () =>
         this.initTimeS === undefined ? false : this.e.GetSimulationTime() > this.initTimeS + 0.5;
 
+    public playerUpdate$: frp.Stream<PlayerUpdate>;
+    public aiUpdate$: frp.Stream<AiUpdate>;
+    public controlValueChange$: frp.Stream<ControlValueChange>;
+    public consistMessage$: frp.Stream<ConsistMessage>;
+    public vehicleCamera$: frp.Stream<VehicleCamera>;
+
+    private playerUpdateNext = (arg0: PlayerUpdate) => {};
+    private aiUpdateNext = (arg0: AiUpdate) => {};
+    private controlValueChangeNext = (arg0: ControlValueChange) => {};
+    private consistMessageNext = (arg0: ConsistMessage) => {};
+    private vehicleCameraNext = (arg0: VehicleCamera) => {};
+
     private initTimeS: number | undefined = undefined;
-    private onCvChangeSource = new FrpSource<ControlValueChange>();
-    private consistMessageSource = new FrpQueuedSource<ConsistMessage>();
-    private vehicleCameraSource = new FrpQueuedSource<VehicleCamera>();
+    private direction = SensedDirection.None;
+    private aiCouplings: undefined | VehicleCouplings = undefined;
+    private playerCouplings: [nextUpdateS: number, couplings: VehicleCouplings] = [0, [false, false]];
 
     /**
      * Construct a new rail vehicle.
@@ -99,68 +110,113 @@ export class FrpVehicle extends FrpEntity {
      */
     constructor(onInit: () => void) {
         super(() => {
+            this.initTimeS = this.e.GetSimulationTime();
             onInit();
-            this.afterInit();
+        });
+
+        this.playerUpdate$ = frp.hub<PlayerUpdate>()(next => {
+            this.playerUpdateNext = e => next(e);
+        });
+        this.aiUpdate$ = frp.hub<AiUpdate>()(next => {
+            this.aiUpdateNext = e => next(e);
+        });
+        this.controlValueChange$ = frp.hub<ControlValueChange>()(next => {
+            this.controlValueChangeNext = e => next(e);
+        });
+        this.consistMessage$ = frp.hub<ConsistMessage>()(next => {
+            this.consistMessageNext = e => next(e);
+        });
+        this.vehicleCamera$ = frp.hub<VehicleCamera>()(next => {
+            this.vehicleCameraNext = e => next(e);
+        });
+
+        this.update$(dt => {
+            const isPlayer = this.rv.GetIsPlayer();
+            const speedMps = this.rv.GetSpeed();
+            const isStopped = Math.abs(speedMps) < c.stopSpeed;
+
+            // Coupling status (only check it once for AI trains)
+            let couplings;
+            if (isPlayer) {
+                const [nextUpdateS, saved] = this.playerCouplings;
+                if (nextUpdateS <= 0) {
+                    couplings = [
+                        this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Forward),
+                        this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Backward),
+                    ] as VehicleCouplings;
+                    this.playerCouplings = [Math.random() * maxCouplingUpdateS, couplings];
+                } else {
+                    couplings = saved;
+                    this.playerCouplings = [nextUpdateS - dt, saved];
+                }
+                this.aiCouplings = undefined;
+            } else {
+                this.playerCouplings = [0, [false, false]];
+                this.aiCouplings ??= [
+                    this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Forward),
+                    this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Backward),
+                ] as VehicleCouplings;
+                couplings = this.aiCouplings;
+            }
+
+            // Sensed direction
+            if (speedMps > c.stopSpeed) {
+                this.direction = SensedDirection.Forward;
+            } else if (speedMps < -c.stopSpeed) {
+                this.direction = SensedDirection.Backward;
+            }
+
+            if (isPlayer) {
+                // Door status
+                const doorsOpen = [
+                    (this.rv.GetControlValue("DoorsOpenCloseLeft", 0) ?? 0) > 0.5,
+                    (this.rv.GetControlValue("DoorsOpenCloseRight", 0) ?? 0) > 0.5,
+                ] as VehicleDoors;
+
+                this.playerUpdateNext({
+                    dt,
+                    speedMps,
+                    isStopped,
+                    couplings,
+                    doorsOpen,
+                });
+            } else {
+                // To save frames, don't update AI trains that are far away from the
+                // camera.
+                const [x, y, z] = this.rv.getNearPosition();
+                const distanceM2 = x * x + y * y + z + z;
+                const thresholdM = 2 * c.mi.toKm * 1000;
+                if (distanceM2 < thresholdM * thresholdM) {
+                    this.aiUpdateNext({
+                        dt,
+                        speedMps,
+                        isStopped,
+                        direction: this.direction,
+                        couplings,
+                    });
+                }
+            }
         });
     }
 
     /**
-     * Create an event stream that fires for the OnControlValueChange()
-     * callback.
-     * @param guard The stream will produce events as long as this behavior is
-     * true. Defaults to after the control values have settled.
-     * @returns The new event stream.
-     */
-    createOnCvChangeStream(guard = this.areControlsSettled): frp.Stream<ControlValueChange> {
-        return this.onCvChangeSource.createStream(guard);
-    }
-
-    /**
-     * Create an event stream that fires for the OnConsistMessage() callback.
-     * @returns The new event stream.
-     */
-    createOnConsistMessageStream(): frp.Stream<ConsistMessage> {
-        return this.consistMessageSource.createStream(this.always);
-    }
-
-    /**
-     * Create an event stream that fires for the OnConsistMessage() callback
-     * for a particular type of message.
-     * @param id The message ID to filter for.
-     * @returns The new event stream.
-     */
-    createOnConsistMessageStreamFor(id: number): frp.Stream<[content: string, direction: rw.ConsistDirection]> {
-        return frp.compose(
-            this.createOnConsistMessageStream(),
-            frp.filter(([msgId]) => msgId === id),
-            frp.map(([, content, dir]) => [content, dir])
-        );
-    }
-
-    /**
-     * Create an event stream that tracks the current camera view through the
-     * OnCameraEnter() and OnCameraLeave() callbacks.
-     * @returns The new event stream.
-     */
-    createCameraStream(): frp.Stream<VehicleCamera> {
-        return this.vehicleCameraSource.createStream(this.always);
-    }
-
-    /**
-     * Create a continuously updating stream of controlvalues. Nil values are
-     * filtered out, so nonexistent controlvalues will simply never fire their
-     * callbacks.
+     * Transform a player or AI update into a continuously updating stream of
+     * controlvalues. Nil values are filtered out, so nonexistent controlvalues
+     * will simply never fire their callbacks.
      * @param name The name of the controlvalue.
      * @param index The index of the controlvalue, usually 0.
-     * @param guard The stream will produce events as long as this behavior is
-     * true. Defaults to after the control values have settled.
      * @returns The new stream of numbers.
      */
-    createGetCvStream(name: string, index: number, guard = this.areControlsSettled): frp.Stream<number> {
-        return frp.compose(
-            this.createUpdateStreamForBehavior(() => this.rv.GetControlValue(name, index), guard),
-            rejectUndefined()
-        );
+    mapGetCvStream(
+        name: string,
+        index: number
+    ): (eventStream: frp.Stream<PlayerUpdate | AiUpdate>) => frp.Stream<number> {
+        return eventStream =>
+            frp.compose(
+                eventStream,
+                frp.map(_ => this.rv.GetControlValue(name, index)),
+                rejectUndefined()
+            );
     }
 
     /**
@@ -168,13 +224,11 @@ export class FrpVehicle extends FrpEntity {
      * callback for a particular control.
      * @param name The name of the control.
      * @param index The index of the control, usually 0.
-     * @param guard The stream will produce events as long as this behavior is
-     * true. Defaults to after the control values have settled.
      * @returns The new stream of values.
      */
-    createOnCvChangeStreamFor(name: string, index: number, guard = this.areControlsSettled): frp.Stream<number> {
+    createOnCvChangeStreamFor(name: string, index: number): frp.Stream<number> {
         return frp.compose(
-            this.createOnCvChangeStream(guard),
+            this.controlValueChange$,
             frp.filter(([cvcName, cvcIndex]) => cvcName === name && cvcIndex === index),
             frp.map(([, , value]) => value)
         );
@@ -186,72 +240,12 @@ export class FrpVehicle extends FrpEntity {
      * can get to intercepting every possible change of the controlvalue.
      * @param name The name of the control.
      * @param index The index of the control, usually 0.
-     * @param guard The stream will produce events as long as this behavior is
-     * true.
      * @returns The new stream of values.
      */
-    createGetCvAndOnCvChangeStreamFor(
-        name: string,
-        index: number,
-        guard = this.areControlsSettled
-    ): frp.Stream<number> {
-        const onUpdate$ = this.createGetCvStream(name, index, guard);
-        const onCvChange$ = this.createOnCvChangeStreamFor(name, index, guard);
-        return frp.merge<number, number>(onCvChange$)(onUpdate$);
-    }
-
-    /**
-     * Create an event stream that communicates the current status of the
-     * vehicle's front and rear couplers.
-     * @returns The new event stream.
-     */
-    createCouplingsStream(): frp.Stream<VehicleCouplings> {
-        return frp.compose(
-            this.createUpdateStream(),
-            frp.fold<CouplingsAccum, number>((accum, t) => {
-                // AI trains don't couple, so we don't need to probe them again.
-                if (accum === undefined || (t > accum.nextUpdateS && this.rv.GetIsPlayer())) {
-                    const nextUpdateS = t + Math.random() * maxCouplingUpdateS;
-                    const sensed: VehicleCouplings = [
-                        this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Forward),
-                        this.rv.SendConsistMessage(...coupleSenseMessage, rw.ConsistDirection.Backward),
-                    ];
-                    return { nextUpdateS, sensed };
-                } else {
-                    return accum;
-                }
-            }, undefined),
-            frp.map(accum => accum?.sensed ?? [false, false])
-        );
-    }
-
-    /**
-     * Create an event stream that commmunicates who is controlling the vehicle
-     * and in what manner they are doing so.
-     * @returns The new event stream.
-     */
-    createAuthorityStream(): frp.Stream<VehicleAuthority> {
-        return frp.compose(
-            this.createUpdateStreamForBehavior(() => this.rv.GetSpeed()),
-            frp.fold((dir, speed) => {
-                if (speed > c.stopSpeed) {
-                    return SensedDirection.Forward;
-                } else if (speed < -c.stopSpeed) {
-                    return SensedDirection.Backward;
-                } else {
-                    return dir;
-                }
-            }, SensedDirection.None),
-            frp.map(direction =>
-                frp.snapshot(this.isPlayer)
-                    ? VehicleAuthority.IsPlayer
-                    : {
-                          [SensedDirection.Forward]: VehicleAuthority.IsAiMovingForward,
-                          [SensedDirection.None]: VehicleAuthority.IsAiParked,
-                          [SensedDirection.Backward]: VehicleAuthority.IsAiMovingBackward,
-                      }[direction]
-            )
-        );
+    createGetCvAndOnCvChangeStreamFor(name: string, index: number): frp.Stream<number> {
+        const onUpdate$ = frp.compose(this.playerUpdate$, this.mapGetCvStream(name, index));
+        const onCvChange$ = this.createOnCvChangeStreamFor(name, index);
+        return frp.compose(onUpdate$, frp.merge(onCvChange$));
     }
 
     /**
@@ -279,15 +273,40 @@ export class FrpVehicle extends FrpEntity {
         };
     }
 
+    /**
+     * Transform any event stream into a stream that produces false, unless the
+     * original stream produces an event, in which case it produces true for a
+     * specified amount of time. Can be used to drive one-shot special effects
+     * like beeps, tones, messages, etc.
+     * @param durationS The length of the post-event timer.
+     * @returns A curried function that will produce the new event stream.
+     */
+    mapEventStreamTimer(durationS: number = 1): (eventStream: frp.Stream<any>) => frp.Stream<boolean> {
+        return eventStream => {
+            return frp.compose(
+                eventStream,
+                frp.map(_ => undefined),
+                frp.merge(this.playerUpdate$),
+                frp.fold((accum, e) => {
+                    if (e === undefined) {
+                        return durationS;
+                    } else {
+                        return Math.max(accum - e.dt, 0);
+                    }
+                }, 0),
+                frp.map(t => t > 0)
+            );
+        };
+    }
+
     setup() {
         super.setup();
 
         OnControlValueChange = (name, index, value) => {
-            this.onCvChangeSource.call([name, index, value]);
+            this.controlValueChangeNext([name, index, value]);
         };
         OnConsistMessage = (id, content, dir) => {
-            this.consistMessageSource.call([id, content, dir]);
-            this.updateLoopFromCallback();
+            this.consistMessageNext([id, content, dir]);
         };
         OnCameraEnter = (cabEnd, carriageCam) => {
             let vc;
@@ -296,78 +315,10 @@ export class FrpVehicle extends FrpEntity {
             } else {
                 vc = VehicleCamera.Carriage;
             }
-            this.vehicleCameraSource.call(vc);
-            this.updateLoopFromCallback();
+            this.vehicleCameraNext(vc);
         };
         OnCameraLeave = () => {
-            this.vehicleCameraSource.call(VehicleCamera.Outside);
-            this.updateLoopFromCallback();
+            this.vehicleCameraNext(VehicleCamera.Outside);
         };
-    }
-
-    protected afterInit() {
-        this.initTimeS = this.e.GetSimulationTime();
-        this.consistMessageSource.flush();
-        this.vehicleCameraSource.flush();
-    }
-
-    protected updateLoop() {
-        // To save frames, don't update AI trains that are far away from the
-        // camera.
-        if (!this.rv.GetIsPlayer()) {
-            const [x, y, z] = this.rv.getNearPosition();
-            const distanceM2 = x * x + y * y + z + z;
-            const thresholdM = 2 * c.mi.toKm * 1000;
-            if (distanceM2 > thresholdM * thresholdM) {
-                return;
-            }
-        }
-        super.updateLoop();
-    }
-}
-
-/**
- * A queue for FrpSource that stores events that happen before the
- * initialize-and-wait phase has completed. Upon initialization, the queue is
- * flushed.
- */
-export class FrpQueuedSource<T> {
-    private source = new FrpSource<T>();
-    private queue: T[] | undefined = [];
-
-    /**
-     * Create a new event stream and register its callback to the underlying
-     * stream source.
-     * @param guard The event stream will only produce events while this
-     * behavior is true.
-     */
-    createStream(guard: frp.Behavior<boolean>): frp.Stream<T> {
-        return this.source.createStream(guard);
-    }
-
-    /**
-     * Queue the provided value, or if the queue has already been flushed, call
-     * the callbacks in the underlying stream source with the provided value.
-     * @param value The value.
-     */
-    call(value: T) {
-        if (this.queue !== undefined) {
-            this.queue.push(value);
-        } else {
-            this.source.call(value);
-        }
-    }
-
-    /**
-     * Flush all values from the queue and, henceforth, pass values directly to
-     * the underlying stream source.
-     */
-    flush() {
-        if (this.queue !== undefined) {
-            for (const value of this.queue) {
-                this.source.call(value);
-            }
-            this.queue = undefined;
-        }
     }
 }
