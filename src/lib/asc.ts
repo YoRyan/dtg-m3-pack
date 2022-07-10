@@ -97,11 +97,10 @@ export function create(
 
     const isActive = frp.liftN((cutIn, hasPower) => cutIn && hasPower, cutIn, hasPower);
     const aSpeedMps = () => Math.abs(e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps;
-    const accelMphS = () => e.rv.GetAcceleration() * c.mps.toMph;
     const theCabAspect = frp.stepper(cabAspect, undefined);
     const isBrakeAssurance = (aspect: cs.LirrAspect, speedMps: number) => {
-        const rateMphS = toBrakeAssuranceRateMphS(aspect, speedMps);
-        return rateMphS !== undefined ? frp.snapshot(accelMphS) < rateMphS : undefined;
+        const rateMps2 = toBrakeAssuranceRateMps2(aspect, speedMps);
+        return rateMps2 !== undefined ? e.rv.GetAcceleration() < rateMps2 : undefined;
     };
 
     const isOverspeed = frp.liftN(
@@ -324,7 +323,7 @@ function toUnderspeedSetpointMps(aspect: cs.LirrAspect) {
     );
 }
 
-function toBrakeAssuranceRateMphS(aspect: cs.LirrAspect, initSpeedMps: number): number | undefined {
+function toBrakeAssuranceRateMps2(aspect: cs.LirrAspect, initSpeedMps: number): number | undefined {
     const speedMph = initSpeedMps * c.mps.toMph;
     const oneThree = -1.3 * c.mph.toMps;
     const oneSeven = -1.7 * c.mph.toMps;
