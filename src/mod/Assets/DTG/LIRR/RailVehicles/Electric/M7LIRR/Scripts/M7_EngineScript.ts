@@ -979,25 +979,20 @@ const me = new FrpEngine(() => {
     // Cab dome light
     const cabLight = new rw.Light("Cablight");
     const cabLightOn$ = frp.compose(
-        me.createOnCvChangeStreamFor("Cablight", 0),
+        me.createGetCvStream("Cablight", 0), // Requires a constant update (dunno why)
         frp.map(v => v > 0.5)
     );
     cabLightOn$(on => cabLight.Activate(on));
     cabLight.Activate(false);
 
-    // Passenger cabin lights
+    // Passenger cabin lights for outside views
     let exteriorPassLights: rw.Light[] = [];
     for (let i = 1; i <= 9; i++) {
         exteriorPassLights.push(new rw.Light(`RoomLight_0${i}`));
     }
-    const interiorPassLight = new rw.Light("RoomLight_PassView");
     const exteriorPassLightsOn = frp.compose(
         authority$,
         frp.map(auth => auth !== VehicleAuthority.IsAiParked)
-    );
-    const interiorPassLightOn = frp.compose(
-        me.createCameraStream(),
-        frp.map(vc => vc === VehicleCamera.Carriage)
     );
     exteriorPassLightsOn(on => {
         for (const light of exteriorPassLights) {
@@ -1007,6 +1002,14 @@ const me = new FrpEngine(() => {
     for (const light of exteriorPassLights) {
         light.Activate(false);
     }
+
+    // Passenger cabin lights for the passenger view
+    const interiorPassLight = new rw.Light("RoomLight_PassView");
+    const isPassView$ = frp.compose(
+        me.createCameraStream(),
+        frp.map(vc => vc === VehicleCamera.Carriage)
+    );
+    const interiorPassLightOn = me.createUpdateStreamForBehavior(frp.stepper(isPassView$, false)); // Requires a constant update (dunno why)
     interiorPassLightOn(on => interiorPassLight.Activate(on));
     interiorPassLight.Activate(false);
 
