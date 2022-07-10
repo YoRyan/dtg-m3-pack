@@ -62,7 +62,7 @@ export function create(
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AlerterState> {
     const cutInOut$ = frp.compose(
-        e.playerUpdateWithKey$,
+        e.createPlayerWithKeyUpdateStream(),
         frp.filter(_ => frp.snapshot(e.areControlsSettled)),
         mapBehavior(cutIn),
         fsm<undefined | boolean>(undefined),
@@ -75,7 +75,7 @@ export function create(
         rw.ScenarioManager.ShowAlertMessageExt("ALE Vigilance System", msg, popupS, "");
     });
 
-    const camera = frp.stepper(e.vehicleCamera$, VehicleCamera.FrontCab);
+    const camera = frp.stepper(e.createOnCameraStream(), VehicleCamera.FrontCab);
     const isExteriorCamera = () => {
         switch (frp.snapshot(camera)) {
             case VehicleCamera.FrontCab:
@@ -88,7 +88,7 @@ export function create(
 
     const accumStart: AlerterAccum = [AlerterMode.Countdown, countdownS];
     return frp.compose(
-        e.playerUpdateWithKey$,
+        e.createPlayerWithKeyUpdateStream(),
         frp.map((pu): AlerterEvent => [AlerterEventType.Update, pu.dt]),
         frp.merge(input),
         frp.fold<AlerterAccum, AlerterEvent>((accum, event) => {

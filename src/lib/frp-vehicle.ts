@@ -2,7 +2,7 @@
 
 import * as c from "./constants";
 import * as frp from "./frp";
-import { FrpEntity } from "./frp-entity";
+import { FrpEntity, FrpSource } from "./frp-entity";
 import { rejectUndefined } from "./frp-extra";
 import * as rw from "./railworks";
 
@@ -86,17 +86,11 @@ export class FrpVehicle extends FrpEntity {
     public areControlsSettled: frp.Behavior<boolean> = () =>
         this.initTimeS === undefined ? false : this.e.GetSimulationTime() > this.initTimeS + 0.5;
 
-    public playerUpdate$: frp.Stream<PlayerUpdate>;
-    public aiUpdate$: frp.Stream<AiUpdate>;
-    public controlValueChange$: frp.Stream<ControlValueChange>;
-    public consistMessage$: frp.Stream<ConsistMessage>;
-    public vehicleCamera$: frp.Stream<VehicleCamera>;
-
-    private playerUpdateNext = (arg0: PlayerUpdate) => {};
-    private aiUpdateNext = (arg0: AiUpdate) => {};
-    private controlValueChangeNext = (arg0: ControlValueChange) => {};
-    private consistMessageNext = (arg0: ConsistMessage) => {};
-    private vehicleCameraNext = (arg0: VehicleCamera) => {};
+    private playerUpdateSource = new FrpSource<PlayerUpdate>();
+    private aiUpdateSource = new FrpSource<AiUpdate>();
+    private cvChangeSource = new FrpSource<ControlValueChange>();
+    private consistMessageSource = new FrpSource<ConsistMessage>();
+    private vehicleCameraSource = new FrpSource<VehicleCamera>();
 
     private initTimeS: number | undefined = undefined;
     private direction = SensedDirection.None;
@@ -114,23 +108,8 @@ export class FrpVehicle extends FrpEntity {
             onInit();
         });
 
-        this.playerUpdate$ = frp.hub<PlayerUpdate>()(next => {
-            this.playerUpdateNext = e => next(e);
-        });
-        this.aiUpdate$ = frp.hub<AiUpdate>()(next => {
-            this.aiUpdateNext = e => next(e);
-        });
-        this.controlValueChange$ = frp.hub<ControlValueChange>()(next => {
-            this.controlValueChangeNext = e => next(e);
-        });
-        this.consistMessage$ = frp.hub<ConsistMessage>()(next => {
-            this.consistMessageNext = e => next(e);
-        });
-        this.vehicleCamera$ = frp.hub<VehicleCamera>()(next => {
-            this.vehicleCameraNext = e => next(e);
-        });
-
-        this.update$(dt => {
+        const update$ = this.createUpdateStream();
+        update$(dt => {
             const isPlayer = this.rv.GetIsPlayer();
             const speedMps = this.rv.GetSpeed();
             const isStopped = Math.abs(speedMps) < c.stopSpeed;
@@ -173,7 +152,7 @@ export class FrpVehicle extends FrpEntity {
                     (this.rv.GetControlValue("DoorsOpenCloseRight", 0) ?? 0) > 0.5,
                 ] as VehicleDoors;
 
-                this.playerUpdateNext({
+                this.playerUpdateSource.call({
                     dt,
                     speedMps,
                     isStopped,
@@ -187,7 +166,7 @@ export class FrpVehicle extends FrpEntity {
                 const distanceM2 = x * x + y * y + z + z;
                 const thresholdM = 2 * c.mi.toKm * 1000;
                 if (distanceM2 < thresholdM * thresholdM) {
-                    this.aiUpdateNext({
+                    this.aiUpdateSource.call({
                         dt,
                         speedMps,
                         isStopped,
@@ -199,10 +178,32 @@ export class FrpVehicle extends FrpEntity {
         });
     }
 
+    createPlayerUpdateStream() {
+        return this.playerUpdateSource.createStream();
+    }
+
+    createAiUpdateStream() {
+        return this.aiUpdateSource.createStream();
+    }
+
+    createOnCvChangeStream() {
+        return this.cvChangeSource.createStream();
+    }
+
+    createOnConsistMessageStream() {
+        return this.consistMessageSource.createStream();
+    }
+
+    createOnCameraStream() {
+        return this.vehicleCameraSource.createStream();
+    }
+
     /**
      * Transform a player or AI update into a continuously updating stream of
      * controlvalues. Nil values are filtered out, so nonexistent controlvalues
-     * will simply never fire their callbacks.
+     * will simply never fire their callbacks. To account for initial control
+     * movements, values will not be produced until a brief period after the
+     * simulation has initialized.
      * @param name The name of the controlvalue.
      * @param index The index of the controlvalue, usually 0.
      * @returns The new stream of numbers.
@@ -214,6 +215,7 @@ export class FrpVehicle extends FrpEntity {
         return eventStream =>
             frp.compose(
                 eventStream,
+                frp.filter(_ => frp.snapshot(this.areControlsSettled)),
                 frp.map(_ => this.rv.GetControlValue(name, index)),
                 rejectUndefined()
             );
@@ -221,14 +223,17 @@ export class FrpVehicle extends FrpEntity {
 
     /**
      * Create an event stream that fires for the OnControlValueChange()
-     * callback for a particular control.
+     * callback for a particular control. To account for initial control
+     * movements, values will not be produced until a brief period after the
+     * simulation has initialized.
      * @param name The name of the control.
      * @param index The index of the control, usually 0.
      * @returns The new stream of values.
      */
     createOnCvChangeStreamFor(name: string, index: number): frp.Stream<number> {
         return frp.compose(
-            this.controlValueChange$,
+            this.createOnCvChangeStream(),
+            frp.filter(_ => frp.snapshot(this.areControlsSettled)),
             frp.filter(([cvcName, cvcIndex]) => cvcName === name && cvcIndex === index),
             frp.map(([, , value]) => value)
         );
@@ -243,7 +248,7 @@ export class FrpVehicle extends FrpEntity {
      * @returns The new stream of values.
      */
     createGetCvAndOnCvChangeStreamFor(name: string, index: number): frp.Stream<number> {
-        const onUpdate$ = frp.compose(this.playerUpdate$, this.mapGetCvStream(name, index));
+        const onUpdate$ = frp.compose(this.createPlayerUpdateStream(), this.mapGetCvStream(name, index));
         const onCvChange$ = this.createOnCvChangeStreamFor(name, index);
         return frp.compose(onUpdate$, frp.merge(onCvChange$));
     }
@@ -286,7 +291,7 @@ export class FrpVehicle extends FrpEntity {
             return frp.compose(
                 eventStream,
                 frp.map(_ => undefined),
-                frp.merge(this.playerUpdate$),
+                frp.merge(this.createPlayerUpdateStream()),
                 frp.fold((accum, e) => {
                     if (e === undefined) {
                         return durationS;
@@ -303,10 +308,10 @@ export class FrpVehicle extends FrpEntity {
         super.setup();
 
         OnControlValueChange = (name, index, value) => {
-            this.controlValueChangeNext([name, index, value]);
+            this.cvChangeSource.call([name, index, value]);
         };
         OnConsistMessage = (id, content, dir) => {
-            this.consistMessageNext([id, content, dir]);
+            this.consistMessageSource.call([id, content, dir]);
         };
         OnCameraEnter = (cabEnd, carriageCam) => {
             let vc;
@@ -315,10 +320,10 @@ export class FrpVehicle extends FrpEntity {
             } else {
                 vc = VehicleCamera.Carriage;
             }
-            this.vehicleCameraNext(vc);
+            this.vehicleCameraSource.call(vc);
         };
         OnCameraLeave = () => {
-            this.vehicleCameraNext(VehicleCamera.Outside);
+            this.vehicleCameraSource.call(VehicleCamera.Outside);
         };
     }
 }

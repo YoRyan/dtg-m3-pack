@@ -82,7 +82,7 @@ export function setup(v: FrpVehicle, destinations: Destination[], previous: frp.
     });
     // Handle consist messages.
     const consistMessage$ = frp.compose(
-        v.consistMessage$,
+        v.createOnConsistMessageStream(),
         frp.filter(([id]) => id === destinationMessageId)
     );
     consistMessage$(([, content, dir]) => {

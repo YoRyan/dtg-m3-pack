@@ -1,6 +1,7 @@
 /** @noSelfInFile */
 
 import * as frp from "./frp";
+import { FrpSource } from "./frp-entity";
 import { FrpVehicle, PlayerUpdate } from "./frp-vehicle";
 import * as rw from "./railworks";
 
@@ -10,40 +11,40 @@ export class FrpEngine extends FrpVehicle {
      */
     public eng = new rw.Engine("");
 
-    public playerUpdateWithKey$: frp.Stream<PlayerUpdate>;
-    public playerUpdateWithoutKey$: frp.Stream<PlayerUpdate>;
-    public customSignalMessage$: frp.Stream<string>;
-
-    private playerUpdateWithKeyNext = (arg0: PlayerUpdate) => {};
-    private playerUpdateWithoutKeyNext = (arg0: PlayerUpdate) => {};
-    private signalMessageNext = (arg0: string) => {};
+    private playerWithKeyUpdateSource = new FrpSource<PlayerUpdate>();
+    private playerWithoutKeyUpdateSource = new FrpSource<PlayerUpdate>();
+    private signalMessageSource = new FrpSource<string>();
 
     constructor(onInit: () => void) {
         super(onInit);
 
-        this.playerUpdateWithKey$ = frp.hub<PlayerUpdate>()(next => {
-            this.playerUpdateWithKeyNext = e => next(e);
-        });
-        this.playerUpdateWithoutKey$ = frp.hub<PlayerUpdate>()(next => {
-            this.playerUpdateWithoutKeyNext = e => next(e);
-        });
-        this.customSignalMessage$ = frp.hub<string>()(next => {
-            this.signalMessageNext = e => next(e);
-        });
-
-        this.playerUpdate$(pu => {
+        const playerUpdate$ = this.createPlayerUpdateStream();
+        playerUpdate$(pu => {
             if (this.eng.GetIsEngineWithKey()) {
-                this.playerUpdateWithKeyNext(pu);
+                this.playerWithKeyUpdateSource.call(pu);
             } else {
-                this.playerUpdateWithoutKeyNext(pu);
+                this.playerWithoutKeyUpdateSource.call(pu);
             }
         });
     }
+
+    createPlayerWithKeyUpdateStream() {
+        return this.playerWithKeyUpdateSource.createStream();
+    }
+
+    createPlayerWithoutKeyUpdateStream() {
+        return this.playerWithoutKeyUpdateSource.createStream();
+    }
+
+    createOnSignalMessageStream() {
+        return this.signalMessageSource.createStream();
+    }
+
     setup() {
         super.setup();
 
         OnCustomSignalMessage = msg => {
-            this.signalMessageNext(msg);
+            this.signalMessageSource.call(msg);
         };
     }
 }

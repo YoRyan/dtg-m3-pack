@@ -13,9 +13,8 @@ export class FrpEntity {
      */
     public e = new rw.ScriptedEntity("");
 
-    public update$: frp.Stream<number>;
+    private updateSource = new FrpSource<number>();
 
-    private updateNext = (arg0: number) => {};
     private onInit: (this: void) => void;
     private updatingEveryFrame = false;
 
@@ -24,10 +23,11 @@ export class FrpEntity {
      * @param onInit The callback to run when the game calls Initialise().
      */
     constructor(onInit: () => void) {
-        this.update$ = frp.hub<number>()(next => {
-            this.updateNext = e => next(e);
-        });
         this.onInit = onInit;
+    }
+
+    createUpdateStream() {
+        return this.updateSource.createStream();
     }
 
     /**
@@ -36,7 +36,7 @@ export class FrpEntity {
     setup() {
         Initialise = this.onInit;
         Update = dt => {
-            this.updateNext(dt);
+            this.updateSource.call(dt);
             if (!this.updatingEveryFrame) {
                 // EndUpdate() must be called from the Update() callback.
                 this.e.EndUpdate();
@@ -54,5 +54,31 @@ export class FrpEntity {
             this.e.BeginUpdate();
         }
         this.updatingEveryFrame = everyFrame;
+    }
+}
+
+/**
+ * A list of callbacks that proxies access to a single event stream source.
+ */
+export class FrpSource<T> {
+    private nexts: ((arg0: T) => void)[] = [];
+
+    /**
+     * Create a new event stream and register its callback to this list.
+     */
+    createStream(): frp.Stream<T> {
+        return next => {
+            this.nexts.push(next);
+        };
+    }
+
+    /**
+     * Call the callbacks in this list with the provided value.
+     * @param value The value to run the callbacks with.
+     */
+    call(value: T) {
+        for (const next of this.nexts) {
+            next(value);
+        }
     }
 }

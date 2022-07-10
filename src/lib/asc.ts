@@ -89,7 +89,7 @@ export function create(
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AscState> {
     const cutInOut$ = frp.compose(
-        e.playerUpdateWithKey$,
+        e.createPlayerWithKeyUpdateStream(),
         frp.filter(_ => frp.snapshot(e.areControlsSettled)),
         mapBehavior(cutIn),
         fsm<undefined | boolean>(undefined),
@@ -119,7 +119,7 @@ export function create(
         theCabAspect
     );
     const overspeed$ = frp.compose(
-        e.playerUpdateWithKey$,
+        e.createPlayerWithKeyUpdateStream(),
         mapBehavior(isOverspeed),
         fsm(false),
         frp.filter(([from, to]) => !from && to),
@@ -138,7 +138,7 @@ export function create(
     );
 
     return frp.compose(
-        e.playerUpdateWithKey$,
+        e.createPlayerWithKeyUpdateStream(),
         frp.map((pu): AscEvent => [AscEventType.Update, pu.dt]),
         frp.merge(overspeed$),
         frp.merge(downgrade$),

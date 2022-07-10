@@ -91,9 +91,12 @@ enum BrakeLight {
 
 const me = new FrpEngine(() => {
     // Useful streams and behaviors
-    const speedoMph$ = frp.compose(me.playerUpdate$, me.mapGetCvStream("SpeedometerMPH", 0));
+    const speedoMph$ = frp.compose(me.createPlayerWithKeyUpdateStream(), me.mapGetCvStream("SpeedometerMPH", 0));
     const speedoMph = frp.stepper(speedoMph$, 0);
-    const brakePipePsi$ = frp.compose(me.playerUpdate$, me.mapGetCvStream("AirBrakePipePressurePSI", 0));
+    const brakePipePsi$ = frp.compose(
+        me.createPlayerWithKeyUpdateStream(),
+        me.mapGetCvStream("AirBrakePipePressurePSI", 0)
+    );
     const brakePipePsi = frp.stepper(brakePipePsi$, 0);
 
     // Event streams for the startup (Z) and emergency brake (Backspace)
@@ -111,7 +114,7 @@ const me = new FrpEngine(() => {
 
     // The master controller/reverser/master key interlock
     const interlockState$ = frp.compose(
-        me.controlValueChange$,
+        me.createOnCvChangeStream(),
         frp.merge(autostartEvent$),
         me.foldAfterSettled(
             (accum, input) => {
@@ -291,14 +294,14 @@ const me = new FrpEngine(() => {
 
     // Pulse code cab signaling
     const cabSignalFromMessage$ = frp.compose(
-        me.customSignalMessage$,
+        me.createOnSignalMessageStream(),
         frp.map(msg => cs.toPulseCode(msg)),
         rejectUndefined(),
         frp.map(pc => cs.toLirrAspect(pc))
     );
     const cabSignalFromMessage = frp.stepper(cabSignalFromMessage$, undefined);
     const cabSignal$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         me.foldAfterSettled(
             // If we've received a code from a signal message, that should
             // override the initial/save game value.
@@ -316,7 +319,7 @@ const me = new FrpEngine(() => {
         frp.map((aspect): CssEvent => [CssEventType.Aspect, aspect])
     );
     const cabSignalWithDelay$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         frp.map((pu): CssEvent => [CssEventType.Update, pu.dt]),
         frp.merge(cabSignalEvent$),
         frp.fold<CssAccum, CssEvent>(
@@ -354,7 +357,7 @@ const me = new FrpEngine(() => {
         frp.filter(() => frp.snapshot(me.areControlsSettled))
     );
     const setSignalSpeed$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         mapBehavior(
             frp.liftN(
                 (aspect, hasPower) =>
@@ -407,7 +410,7 @@ const me = new FrpEngine(() => {
         frp.map(_ => ale.AlerterInput.ActivityThatCancelsPenalty)
     );
     const aleInput$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         mapBehavior(aleActivity),
         frp.filter(v => v),
         frp.map(_ => ale.AlerterInput.Activity),
@@ -424,7 +427,7 @@ const me = new FrpEngine(() => {
     // ASC signal speed enforcement subsystem
     const ascCutIn = createCutInBehavior(me, "ATCCutIn", 0);
     const ascStatus$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         mapBehavior(
             frp.liftN(
                 (cutIn, hasPower) => {
@@ -459,7 +462,7 @@ const me = new FrpEngine(() => {
     const acses$ = frp.compose(acses.create(me, acknowledge, coastOrBrake, acsesCutIn, hasPower), frp.hub());
     const acsesState = frp.stepper(acses$, acses.initState);
     const acsesStatus$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         mapBehavior(
             frp.liftN(
                 (cutIn, hasPower, state) => {
@@ -505,7 +508,7 @@ const me = new FrpEngine(() => {
         frp.map(onOff => (onOff ? 1 : 0))
     );
     const acsesOverspeed$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         frp.fold<Overspeed, PlayerUpdate>((accum, pu) => {
             const state = frp.snapshot(acsesState);
             let mode;
@@ -568,7 +571,7 @@ const me = new FrpEngine(() => {
 
     // Set the common penalty brake indicator.
     const isAnyPenalty$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         mapBehavior(
             frp.liftN(
                 (aleState, ascState, acsesState) => {
@@ -605,7 +608,7 @@ const me = new FrpEngine(() => {
 
     // Show the exclamation symbol on the HUD for any audible alarm.
     const isAnyAlarm$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         mapBehavior(
             frp.liftN(
                 (aleState, ascState, acsesState) => aleState.alarm || ascState.alarm || acsesState.alarm,
@@ -664,7 +667,7 @@ const me = new FrpEngine(() => {
         () => (me.rv.GetControlValue("Charging", 0) as number) > 0.5
     );
     const chargeBrakes$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         frp.filter(_ => frp.snapshot(brakesCanCharge)),
         frp.map((pu): BrakeEvent => {
             const chargePerSecond = 0.063; // 10 seconds to recharge to service braking
@@ -680,7 +683,7 @@ const me = new FrpEngine(() => {
         frp.map(autostart => (autostart === ControlEvent.Autostart ? BrakeType.Autostart : BrakeType.Emergency))
     );
     const brakeCommandAndEvents$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         mapBehavior(brakeCommand),
         frp.merge(emergencyBrakeEvent$),
         frp.merge(autostartBrakeEvent$),
@@ -729,7 +732,7 @@ const me = new FrpEngine(() => {
         brakeCommand,
         emergencyBrake
     );
-    const throttle$ = frp.compose(me.playerUpdateWithKey$, mapBehavior(throttleCommand));
+    const throttle$ = frp.compose(me.createPlayerWithKeyUpdateStream(), mapBehavior(throttleCommand));
     // The physics value of the reverser should be one of three values.
     const reverser$ = frp.compose(
         userReverser$,
@@ -763,7 +766,7 @@ const me = new FrpEngine(() => {
         emergencyBrake
     );
     const dynamicBrake$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         // Simulate a lag time for the dynamics to ramp up and down.
         frp.fold<number, PlayerUpdate>((accum, pu) => {
             const target = frp.snapshot(dynamicBrakeCommand);
@@ -843,7 +846,7 @@ const me = new FrpEngine(() => {
     });
 
     // Operating display indicators
-    const nMultipleUnits$ = frp.compose(me.playerUpdateWithKey$, mapBehavior(nMultipleUnits));
+    const nMultipleUnits$ = frp.compose(me.createPlayerWithKeyUpdateStream(), mapBehavior(nMultipleUnits));
     nMultipleUnits$(n => {
         me.rv.SetControlValue("Cars", 0, n);
     });
@@ -852,7 +855,7 @@ const me = new FrpEngine(() => {
     const speedoMphDigits$ = frp.compose(speedoMph$, threeDigitDisplay);
     const brakePipePsiDigits$ = frp.compose(brakePipePsi$, threeDigitDisplay);
     const brakeCylinderPsiDigits$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         me.mapGetCvStream("TrainBrakeCylinderPressurePSI", 0),
         threeDigitDisplay
     );
@@ -897,7 +900,7 @@ const me = new FrpEngine(() => {
         new rw.Light("Headlight_Bright_AuxR"),
     ];
     const aiHeadlights$ = frp.compose(
-        me.aiUpdate$,
+        me.createAiUpdateStream(),
         frp.map(au => {
             if (au.direction === SensedDirection.Forward) {
                 const [frontCoupled] = au.couplings;
@@ -908,7 +911,7 @@ const me = new FrpEngine(() => {
         })
     );
     const leadHeadlights$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         frp.map(_ => {
             const cv = me.rv.GetControlValue("Headlights", 0) as number;
             if (cv > 1.5) {
@@ -921,7 +924,7 @@ const me = new FrpEngine(() => {
         })
     );
     const helperHeadlights$ = frp.compose(
-        me.playerUpdateWithoutKey$,
+        me.createPlayerWithoutKeyUpdateStream(),
         frp.map(_ => HeadLight.Off)
     );
     const headlights$ = frp.compose(aiHeadlights$, frp.merge(leadHeadlights$), frp.merge(helperHeadlights$));
@@ -937,7 +940,7 @@ const me = new FrpEngine(() => {
     // Marker light control
     const markerLights = [new rw.Light("Taillight_L"), new rw.Light("Taillight_R")];
     const aiMarkers$ = frp.compose(
-        me.aiUpdate$,
+        me.createAiUpdateStream(),
         frp.map(au => {
             if (au.direction === SensedDirection.Backward) {
                 const [frontCoupled] = au.couplings;
@@ -948,14 +951,14 @@ const me = new FrpEngine(() => {
         })
     );
     const leadMarkers$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         frp.map(_ => {
             const cv = me.rv.GetControlValue("Taillights", 0) as number;
             return cv > 0.5;
         })
     );
     const helperMarkers$ = frp.compose(
-        me.playerUpdateWithoutKey$,
+        me.createPlayerWithoutKeyUpdateStream(),
         frp.map(pu => {
             const [frontCoupled] = pu.couplings;
             return !frontCoupled;
@@ -971,25 +974,25 @@ const me = new FrpEngine(() => {
     // Doors open status indicator and hallway lights
     const hallLights = [new rw.Light("HallLight_001"), new rw.Light("HallLight_002")];
     const aiIsStopped$ = frp.compose(
-        me.aiUpdate$,
+        me.createAiUpdateStream(),
         frp.map(au => au.isStopped)
     );
     const playerAnyDoorOpen$ = frp.compose(
-        me.playerUpdate$,
+        me.createPlayerUpdateStream(),
         frp.map(pu => {
             const [left, right] = pu.doorsOpen;
             return left || right;
         })
     );
     const playerLeftDoorOpen$ = frp.compose(
-        me.playerUpdate$,
+        me.createPlayerUpdateStream(),
         frp.map(pu => {
             const [left] = pu.doorsOpen;
             return left;
         })
     );
     const playerRightDoorOpen$ = frp.compose(
-        me.playerUpdate$,
+        me.createPlayerUpdateStream(),
         frp.map(pu => {
             const [, right] = pu.doorsOpen;
             return right;
@@ -1017,8 +1020,8 @@ const me = new FrpEngine(() => {
 
     // Pantograph gate
     const pantoGate$ = frp.compose(
-        me.playerUpdate$,
-        frp.merge(me.aiUpdate$),
+        me.createPlayerUpdateStream(),
+        frp.merge(me.createAiUpdateStream()),
         frp.map(u => {
             const [frontCoupled] = u.couplings;
             return frontCoupled ? u.dt : -u.dt;
@@ -1031,12 +1034,12 @@ const me = new FrpEngine(() => {
     // Cab dome light
     const cabLight = new rw.Light("Cablight");
     const noCabLight$ = frp.compose(
-        me.aiUpdate$,
-        frp.merge(me.playerUpdateWithoutKey$),
+        me.createAiUpdateStream(),
+        frp.merge(me.createPlayerWithoutKeyUpdateStream()),
         frp.map(_ => false)
     );
     const playerCabLight$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         me.mapGetCvStream("Cablight", 0),
         frp.map(v => v > 0.5)
     );
@@ -1051,11 +1054,11 @@ const me = new FrpEngine(() => {
         exteriorPassLights.push(new rw.Light(`RoomLight_0${i}`));
     }
     const aiExteriorPassLights$ = frp.compose(
-        me.aiUpdate$,
+        me.createAiUpdateStream(),
         frp.map(au => au.direction !== SensedDirection.None)
     );
     const playerExteriorPassLights$ = frp.compose(
-        me.playerUpdate$,
+        me.createPlayerUpdateStream(),
         frp.map(_ => true)
     );
     const exteriorPassLightsOn$ = frp.compose(aiExteriorPassLights$, frp.merge(playerExteriorPassLights$));
@@ -1068,15 +1071,18 @@ const me = new FrpEngine(() => {
     // Passenger cabin lights for the passenger view
     const interiorPassLight = new rw.Light("RoomLight_PassView");
     const isPassView$ = frp.compose(
-        me.vehicleCamera$,
+        me.createOnCameraStream(),
         frp.map(vc => vc === VehicleCamera.Carriage)
     );
     const noInteriorPassLight$ = frp.compose(
-        me.aiUpdate$,
-        frp.merge(me.playerUpdateWithoutKey$),
+        me.createAiUpdateStream(),
+        frp.merge(me.createPlayerWithoutKeyUpdateStream()),
         frp.map(_ => false)
     );
-    const playerInteriorPassLight$ = frp.compose(me.playerUpdateWithKey$, mapBehavior(frp.stepper(isPassView$, false)));
+    const playerInteriorPassLight$ = frp.compose(
+        me.createPlayerWithKeyUpdateStream(),
+        mapBehavior(frp.stepper(isPassView$, false))
+    );
     const interiorPassLightOn$ = frp.compose(noInteriorPassLight$, frp.merge(playerInteriorPassLight$));
     interiorPassLightOn$(on => {
         interiorPassLight.Activate(on);
@@ -1084,7 +1090,7 @@ const me = new FrpEngine(() => {
 
     // Brake cylinder status lights
     const aiBrakeLight$ = frp.compose(
-        me.aiUpdate$,
+        me.createAiUpdateStream(),
         frp.map(au => {
             if (au.direction === SensedDirection.None) {
                 return BrakeLight.Amber;
@@ -1096,7 +1102,7 @@ const me = new FrpEngine(() => {
         })
     );
     const playerBrakeLight$ = frp.compose(
-        me.playerUpdate$,
+        me.createPlayerUpdateStream(),
         frp.map(_ => {
             const brakeCylPsi = me.rv.GetControlValue("TrainBrakeCylinderPressurePSI", 0) as number;
             if (brakeCylPsi > 34) {
@@ -1117,13 +1123,13 @@ const me = new FrpEngine(() => {
 
     // Destination board selector
     const previousDest$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         me.mapGetCvStream("DecreaseDestination", 0),
         frp.filter(cv => cv > 0.5),
         frp.throttle(250)
     );
     const nextDest$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         me.mapGetCvStream("IncreaseDestination", 0),
         frp.filter(cv => cv > 0.5),
         frp.throttle(250)
@@ -1175,12 +1181,12 @@ const me = new FrpEngine(() => {
     // these controls when first entering the cab.
     const setupMuteS = 1;
     const insideCab$ = frp.compose(
-        me.vehicleCamera$,
+        me.createOnCameraStream(),
         frp.map(vc => vc === VehicleCamera.FrontCab)
     );
     const insideCab = frp.stepper(insideCab$, false);
     const isSetupInsideCab$ = frp.compose(
-        me.playerUpdateWithKey$,
+        me.createPlayerWithKeyUpdateStream(),
         frp.fold(
             (countdownS, pu) => (frp.snapshot(insideCab) ? Math.max(countdownS - pu.dt, 0) : countdownS),
             setupMuteS
@@ -1188,8 +1194,8 @@ const me = new FrpEngine(() => {
         frp.map(countdownS => countdownS <= 0)
     );
     const isNotSetup$ = frp.compose(
-        me.aiUpdate$,
-        frp.merge(me.playerUpdateWithoutKey$),
+        me.createAiUpdateStream(),
+        frp.merge(me.createPlayerWithoutKeyUpdateStream()),
         frp.map(_ => false)
     );
     const enableControlSounds$ = frp.compose(isSetupInsideCab$, frp.merge(isNotSetup$));
@@ -1198,14 +1204,14 @@ const me = new FrpEngine(() => {
     });
 
     // Force the pantograph on to allow driving on routes with overhead electrification.
-    me.playerUpdateWithKey$(_ => {
+    me.createPlayerWithKeyUpdateStream()(_ => {
         me.rv.SetControlValue("PantographControl", 0, 1);
         me.rv.SetControlValue("VirtualPantographControl", 0, 0);
     });
 
     // Process OnControlValueChange events.
     const onCvChange$ = frp.compose(
-        me.controlValueChange$,
+        me.createOnCvChangeStream(),
         frp.reject(([name]) => name === "MasterKey" || name === "UserVirtualReverser" || name === "ThrottleAndBrake")
     );
     onCvChange$(([name, index, value]) => me.rv.SetControlValue(name, index, value));

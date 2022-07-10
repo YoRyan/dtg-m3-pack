@@ -94,7 +94,7 @@ export function create(
     hasPower: frp.Behavior<boolean>
 ): frp.Stream<AcsesState> {
     const cutInOut$ = frp.compose(
-        e.playerUpdateWithKey$,
+        e.createPlayerWithKeyUpdateStream(),
         frp.filter(_ => frp.snapshot(e.areControlsSettled)),
         mapBehavior(cutIn),
         fsm<undefined | boolean>(undefined),
@@ -112,14 +112,14 @@ export function create(
     const speedMps = () => (e.rv.GetControlValue("SpeedometerMPH", 0) as number) * c.mph.toMps;
 
     const pts$ = frp.compose(
-        e.customSignalMessage$,
+        e.createOnSignalMessageStream(),
         frp.map(msg => cs.toPositiveStopDistanceM(msg)),
         rejectUndefined()
     );
     const pts = frp.stepper(pts$, false);
 
     const speedPostIndex$ = frp.compose(
-        e.playerUpdateWithKey$,
+        e.createPlayerWithKeyUpdateStream(),
         mapSpeedPostsStream(e),
         indexObjectsSensedByDistance(isInactive),
         frp.hub()
@@ -127,7 +127,7 @@ export function create(
     const speedPostIndex = frp.stepper(speedPostIndex$, new Map<number, Sensed<SpeedPost>>());
 
     const signalIndex$ = frp.compose(
-        e.playerUpdateWithKey$,
+        e.createPlayerWithKeyUpdateStream(),
         mapSignalStream(e),
         indexObjectsSensedByDistance(isInactive)
     );
@@ -208,7 +208,7 @@ export function create(
         trackSpeed: AcsesSpeed.CutOut,
     };
     return frp.compose(
-        e.playerUpdateWithKey$,
+        e.createPlayerWithKeyUpdateStream(),
         frp.map((pu): AcsesEvent => [AcsesEventType.Update, pu.dt]),
         frp.merge(trackSpeedDowngrade$),
         frp.fold<AcsesAccum, AcsesEvent>((accum, event) => {
