@@ -23,12 +23,6 @@ export enum AcsesSpeed {
     CutOut,
     Degraded,
 }
-export const initState: AcsesState = {
-    brakes: AcsesBrake.None,
-    alarm: false,
-    overspeed: false,
-    trackSpeed: AcsesSpeed.CutOut,
-};
 
 type AcsesAccum = {
     acknowledged: Set<Hazard>;

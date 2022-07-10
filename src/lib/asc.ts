@@ -27,13 +27,6 @@ export enum AscBrake {
     MaxService,
     Emergency,
 }
-export const initState: AscState = {
-    brakes: AscBrake.None,
-    alarm: false,
-    overspeed: false,
-    atcForestall: false,
-    brakeAssurance: false,
-};
 
 type AscAccum =
     | AscMode.Normal

@@ -418,7 +418,7 @@ const me = new FrpEngine(() => {
     );
     const aleCutIn = createCutInBehavior(me, "ALECutIn", 0);
     const ale$ = frp.compose(ale.create(me, aleInput$, aleCutIn, hasPower), frp.hub());
-    const aleState = frp.stepper(ale$, ale.initState);
+    const aleState = frp.stepper(ale$, undefined);
     ale$(state => {
         me.rv.SetControlValue("AlerterIndicator", 0, state.alarm ? 1 : 0);
         me.rv.SetControlValue("ALEAlarm", 0, state.alarm ? 1 : 0);
@@ -446,7 +446,7 @@ const me = new FrpEngine(() => {
         asc.create(me, cabSignalWithDelay$, acknowledge, coastOrBrake, ascCutIn, hasPower),
         frp.hub()
     );
-    const ascState = frp.stepper(asc$, asc.initState);
+    const ascState = frp.stepper(asc$, undefined);
     ascStatus$(status => {
         me.rv.SetControlValue("ATCStatus", 0, status);
     });
@@ -460,7 +460,7 @@ const me = new FrpEngine(() => {
     // ACSES track speed enforcement subsystem
     const acsesCutIn = createCutInBehavior(me, "ACSESCutIn", 0);
     const acses$ = frp.compose(acses.create(me, acknowledge, coastOrBrake, acsesCutIn, hasPower), frp.hub());
-    const acsesState = frp.stepper(acses$, acses.initState);
+    const acsesState = frp.stepper(acses$, undefined);
     const acsesStatus$ = frp.compose(
         me.createPlayerWithKeyUpdateStream(),
         mapBehavior(
@@ -468,7 +468,7 @@ const me = new FrpEngine(() => {
                 (cutIn, hasPower, state) => {
                     if (hasPower) {
                         if (cutIn) {
-                            return state.trackSpeed === acses.AcsesSpeed.Degraded ? 1 : 2;
+                            return state?.trackSpeed === acses.AcsesSpeed.Degraded ? 1 : 2;
                         } else {
                             return 0;
                         }
@@ -484,9 +484,11 @@ const me = new FrpEngine(() => {
     );
     const acsesBeep$ = frp.compose(
         acses$,
-        fsm(acses.initState),
+        fsm<undefined | acses.AcsesState>(undefined),
         frp.filter(([from, to]) => {
-            if (to.alarm) {
+            if (from === undefined || to === undefined) {
+                return false;
+            } else if (to.alarm) {
                 return false;
             } else if (from.trackSpeed === acses.AcsesSpeed.CutOut) {
                 return to.trackSpeed !== acses.AcsesSpeed.CutOut;
@@ -512,7 +514,7 @@ const me = new FrpEngine(() => {
         frp.fold<Overspeed, PlayerUpdate>((accum, pu) => {
             const state = frp.snapshot(acsesState);
             let mode;
-            if (state.overspeed) {
+            if (state?.overspeed) {
                 mode = state.brakes === acses.AcsesBrake.None ? OverspeedMode.Warning : OverspeedMode.Penalty;
             } else {
                 mode = OverspeedMode.None;
@@ -575,20 +577,20 @@ const me = new FrpEngine(() => {
         mapBehavior(
             frp.liftN(
                 (aleState, ascState, acsesState) => {
-                    switch (aleState.brakes) {
+                    switch (aleState?.brakes) {
                         case ale.AlerterBrake.Penalty:
                             return true;
                         default:
                             break;
                     }
-                    switch (ascState.brakes) {
+                    switch (ascState?.brakes) {
                         case asc.AscBrake.Penalty:
                         case asc.AscBrake.MaxService:
                             return true;
                         default:
                             break;
                     }
-                    switch (acsesState.brakes) {
+                    switch (acsesState?.brakes) {
                         case acses.AcsesBrake.Penalty:
                             return true;
                         default:
@@ -611,7 +613,7 @@ const me = new FrpEngine(() => {
         me.createPlayerWithKeyUpdateStream(),
         mapBehavior(
             frp.liftN(
-                (aleState, ascState, acsesState) => aleState.alarm || ascState.alarm || acsesState.alarm,
+                (aleState, ascState, acsesState) => aleState?.alarm || ascState?.alarm || acsesState?.alarm,
                 aleState,
                 ascState,
                 acsesState
@@ -628,14 +630,14 @@ const me = new FrpEngine(() => {
     // controller and the penalty applications issued by the safety systems.
     const brakeCommand = frp.liftN(
         (mc, aleState, ascState, acsesState): BrakeCommand => {
-            if (ascState.brakes === asc.AscBrake.Emergency || mc === ControllerRegion.EmergencyBrake) {
+            if (ascState?.brakes === asc.AscBrake.Emergency || mc === ControllerRegion.EmergencyBrake) {
                 return BrakeType.Emergency;
             } else if (
-                aleState.brakes === ale.AlerterBrake.Penalty ||
-                ascState.brakes === asc.AscBrake.Penalty ||
-                ascState.brakes === asc.AscBrake.MaxService ||
-                acsesState.brakes === acses.AcsesBrake.Penalty ||
-                acsesState.brakes === acses.AcsesBrake.PositiveStop
+                aleState?.brakes === ale.AlerterBrake.Penalty ||
+                ascState?.brakes === asc.AscBrake.Penalty ||
+                ascState?.brakes === asc.AscBrake.MaxService ||
+                acsesState?.brakes === acses.AcsesBrake.Penalty ||
+                acsesState?.brakes === acses.AcsesBrake.PositiveStop
             ) {
                 return [BrakeType.Service, 1];
             } else if (mc === undefined) {
