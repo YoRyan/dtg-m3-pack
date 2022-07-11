@@ -154,12 +154,13 @@ export function create(
                 const thePts = frp.snapshot(pts);
 
                 let hazards: Hazard[] = [];
+                const brakingCurveMps2 = penaltyCurveMps2 * brakingCurveGradientFactor(e.rv.GetGradient());
                 // Add advance speed limits.
                 let advanceLimits = new Map<number, AdvanceLimitHazard>();
                 for (const [id, sensed] of frp.snapshot(speedPostIndex)) {
                     const hazard = accum.advanceLimits.get(id) || new AdvanceLimitHazard();
                     advanceLimits.set(id, hazard);
-                    hazard.update(theSpeedMps, sensed);
+                    hazard.update(brakingCurveMps2, theSpeedMps, sensed);
                     hazards.push(hazard);
                 }
                 // Add stop signals, if we are not in degraded mode and a
@@ -168,13 +169,18 @@ export function create(
                     for (const [id, [distanceM, signal]] of frp.snapshot(signalIndex)) {
                         if (signal.proState === rw.ProSignalState.Red) {
                             const cushionM = 40 + c.ft.toM;
-                            const hazard = new StopSignalHazard(theSpeedMps, thePts + cushionM, distanceM);
+                            const hazard = new StopSignalHazard(
+                                brakingCurveMps2,
+                                theSpeedMps,
+                                thePts + cushionM,
+                                distanceM
+                            );
                             hazards.push(hazard);
                         }
                     }
                 }
                 // Add current track speed limit.
-                hazards.push(new TrackSpeedHazard(frp.snapshot(trackSpeedMps)));
+                hazards.push(new TrackSpeedHazard(trackSpeedMps));
                 // Sort by penalty curve speed.
                 hazards.sort((a, b) => a.penaltyCurveMps - b.penaltyCurveMps);
                 return { advanceLimits, hazards };
@@ -745,7 +751,7 @@ class AdvanceLimitHazard implements Hazard {
 
     private violatedAtM: number | undefined = undefined;
 
-    update(playerSpeedMps: number, sensed: Sensed<SpeedPost>) {
+    update(curveMps2: number, playerSpeedMps: number, sensed: Sensed<SpeedPost>) {
         const [distanceM, post] = sensed;
         const aDistanceM = Math.abs(distanceM);
 
@@ -765,10 +771,13 @@ class AdvanceLimitHazard implements Hazard {
 
         const rightWay = (distanceM > 0 && playerSpeedMps >= 0) || (distanceM < 0 && playerSpeedMps <= 0);
         this.alertCurveMps = rightWay
-            ? Math.max(getBrakingCurve(post.speedMps, aDistanceM, alertCountdownS), post.speedMps + alertMarginMps)
+            ? Math.max(
+                  getBrakingCurve(curveMps2, post.speedMps, aDistanceM, alertCountdownS),
+                  post.speedMps + alertMarginMps
+              )
             : hugeSpeed;
         this.penaltyCurveMps = rightWay
-            ? Math.max(getBrakingCurve(post.speedMps, aDistanceM, 0), post.speedMps + penaltyMarginMps)
+            ? Math.max(getBrakingCurve(curveMps2, post.speedMps, aDistanceM, 0), post.speedMps + penaltyMarginMps)
             : hugeSpeed;
         this.trackSpeedMps = revealTrackSpeed ? post.speedMps : undefined;
         if (this.violatedAtM === undefined && Math.abs(playerSpeedMps) > this.alertCurveMps) {
@@ -785,12 +794,12 @@ class StopSignalHazard implements Hazard {
     penaltyCurveMps: number;
     trackSpeedMps = undefined;
 
-    constructor(playerSpeedMps: number, targetM: number, distanceM: number) {
+    constructor(curveMps2: number, playerSpeedMps: number, targetM: number, distanceM: number) {
         const rightWay = (distanceM > 0 && playerSpeedMps >= 0) || (distanceM < 0 && playerSpeedMps <= 0);
         if (rightWay) {
             const curveDistanceM = Math.max(Math.abs(distanceM) - targetM, 0);
-            this.alertCurveMps = getBrakingCurve(0, curveDistanceM, alertCountdownS);
-            this.penaltyCurveMps = getBrakingCurve(0, curveDistanceM, 0);
+            this.alertCurveMps = getBrakingCurve(curveMps2, 0, curveDistanceM, alertCountdownS);
+            this.penaltyCurveMps = getBrakingCurve(curveMps2, 0, curveDistanceM, 0);
         } else {
             this.alertCurveMps = hugeSpeed;
             this.penaltyCurveMps = hugeSpeed;
@@ -798,7 +807,28 @@ class StopSignalHazard implements Hazard {
     }
 }
 
-function getBrakingCurve(vf: number, d: number, t: number) {
-    const a = penaltyCurveMps2;
+function getBrakingCurve(a: number, vf: number, d: number, t: number) {
     return Math.max(Math.pow(Math.pow(a * t, 2) - 2 * a * d + Math.pow(vf, 2), 0.5) + a * t, vf);
+}
+
+function brakingCurveGradientFactor(gradientPct: number): number {
+    if (gradientPct > 0) {
+        return 1 + (1 - brakingCurveGradientFactor(-gradientPct));
+    } else if (gradientPct < -2.96) {
+        return 1 - 0.7;
+    } else if (gradientPct < -2.64) {
+        return 1 - 0.6;
+    } else if (gradientPct < -2.26) {
+        return 1 - 0.5;
+    } else if (gradientPct < -1.83) {
+        return 1 - 0.4;
+    } else if (gradientPct < -1.32) {
+        return 1 - 0.3;
+    } else if (gradientPct < -0.72) {
+        return 1 - 0.2;
+    } else if (gradientPct < -0.3) {
+        return 1 - 0.1;
+    } else {
+        return 1;
+    }
 }
