@@ -46,6 +46,9 @@ enum AcsesEventType {
     Downgrade,
 }
 
+type TrackSpeedChangeAccum = undefined | [savedSpeedMps: number, upgradeAfterM: number];
+const minTrackSpeedUpgradeDistM = 350 * c.ft.toM; // about 4 car lengths
+
 /**
  * Distance traveled since the last search along with a collection of
  * statelessly sensed objects.
@@ -130,6 +133,7 @@ export function create(
     const trackSpeedMps$ = frp.compose(
         speedPostIndex$,
         createTrackSpeedStream(
+            e,
             () => e.rv.GetCurrentSpeedLimit()[0],
             () => e.rv.GetConsistLength(),
             isInactive
@@ -435,6 +439,7 @@ function iterateRestrictiveSignals(
 /**
  * Create a continuous event stream that tracks the current track speed limit as
  * sensed by the head-end unit.
+ * @param e The player's engine.
  * @param gameTrackSpeedLimitMps A behavior to obtain the game-provided track
  * speed limit, which changes when the rear of the train clears the last
  * restriction.
@@ -444,6 +449,7 @@ function iterateRestrictiveSignals(
  * @returns The new event stream of track speed in m/s.
  */
 function createTrackSpeedStream(
+    e: FrpEngine,
     gameTrackSpeedLimitMps: frp.Behavior<number>,
     consistLengthM: frp.Behavior<number>,
     reset: frp.Behavior<boolean>
@@ -498,7 +504,41 @@ function createTrackSpeedStream(
                     return inferredSpeedMps;
                 },
                 0 // Should get instantly replaced by the game-calculated speed.
-            )
+            ),
+            // To smooth out frequent track speed changes, i.e. through
+            // crossovers, impose a distance-based delay before upgrading the
+            // track speed.
+            frp.merge(e.createPlayerWithKeyUpdateStream()),
+            frp.fold<TrackSpeedChangeAccum, number | PlayerUpdate>((accum, input) => {
+                // New speed
+                if (typeof input === "number") {
+                    const speedMps = input;
+                    if (accum === undefined) {
+                        return [speedMps, 0];
+                    }
+
+                    const [savedSpeedMps, upgradeAfterM] = accum;
+                    if (speedMps < savedSpeedMps || (speedMps > savedSpeedMps && upgradeAfterM <= 0)) {
+                        return [speedMps, minTrackSpeedUpgradeDistM];
+                    } else {
+                        return [savedSpeedMps, upgradeAfterM];
+                    }
+                }
+
+                // Clock update
+                if (accum === undefined) {
+                    return [frp.snapshot(gameTrackSpeedLimitMps), 0];
+                } else {
+                    const pu = input;
+                    const traveledM = pu.dt * Math.abs(e.rv.GetSpeed());
+                    const [savedSpeedMps, upgradeAfterM] = accum;
+                    return [savedSpeedMps, Math.max(upgradeAfterM - traveledM, 0)];
+                }
+            }, undefined),
+            frp.map(accum => {
+                const [savedSpeedMps] = accum as [number, number];
+                return savedSpeedMps;
+            })
         );
     };
 }
