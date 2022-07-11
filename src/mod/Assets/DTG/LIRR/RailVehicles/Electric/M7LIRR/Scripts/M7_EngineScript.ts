@@ -21,9 +21,9 @@ enum ControlEvent {
 
 enum InterlockAllows {
     MasterKeyIn = 0,
-    MasterKeyOutReverserNonKeyOut = 1,
-    ReverserKeyOutMasterControllerNonEmergency = 2,
-    MasterControllerEmergency = 3,
+    MasterKeyOutMasterControllerNonEmergency = 1,
+    ReverserNonKeyOutMasterControllerEmergency = 2,
+    ReverserKeyOut = 3,
 }
 
 type MasterController =
@@ -120,7 +120,7 @@ const me = new FrpEngine(() => {
             (accum, input) => {
                 switch (input) {
                     case ControlEvent.Autostart:
-                        return InterlockAllows.MasterControllerEmergency;
+                        return InterlockAllows.ReverserKeyOut;
                     case ControlEvent.Autostop:
                         return InterlockAllows.MasterKeyIn;
                     case ControlEvent.EmergencyBrake:
@@ -131,27 +131,27 @@ const me = new FrpEngine(() => {
                 switch (accum) {
                     case InterlockAllows.MasterKeyIn:
                         if (name === "MasterKey" && value > 0.5) {
-                            return InterlockAllows.MasterKeyOutReverserNonKeyOut;
+                            return InterlockAllows.MasterKeyOutMasterControllerNonEmergency;
                         }
                         break;
-                    case InterlockAllows.MasterKeyOutReverserNonKeyOut:
+                    case InterlockAllows.MasterKeyOutMasterControllerNonEmergency:
                         if (name === "MasterKey" && value < 0.5) {
                             return InterlockAllows.MasterKeyIn;
-                        } else if (name === "UserVirtualReverser" && value < 2.5) {
-                            return InterlockAllows.ReverserKeyOutMasterControllerNonEmergency;
-                        }
-                        break;
-                    case InterlockAllows.ReverserKeyOutMasterControllerNonEmergency:
-                        if (name === "UserVirtualReverser" && value > 2.5) {
-                            return InterlockAllows.MasterKeyOutReverserNonKeyOut;
                         } else if (name === "ThrottleAndBrake" && value > -0.95) {
-                            return InterlockAllows.MasterControllerEmergency;
+                            return InterlockAllows.ReverserNonKeyOutMasterControllerEmergency;
                         }
                         break;
-                    case InterlockAllows.MasterControllerEmergency:
+                    case InterlockAllows.ReverserNonKeyOutMasterControllerEmergency:
+                        if (name === "UserVirtualReverser" && value < 2.5) {
+                            return InterlockAllows.ReverserKeyOut;
+                        } else if (name === "ThrottleAndBrake" && value < -0.95) {
+                            return InterlockAllows.MasterKeyOutMasterControllerNonEmergency;
+                        }
+                        break;
+                    case InterlockAllows.ReverserKeyOut:
                     default:
-                        if (name === "ThrottleAndBrake" && value < -0.95) {
-                            return InterlockAllows.ReverserKeyOutMasterControllerNonEmergency;
+                        if (name === "UserVirtualReverser" && value > 2.5) {
+                            return InterlockAllows.ReverserNonKeyOutMasterControllerEmergency;
                         }
                         break;
                 }
@@ -175,11 +175,12 @@ const me = new FrpEngine(() => {
         frp.map(cv => {
             switch (frp.snapshot(interlockState)) {
                 case InterlockAllows.MasterKeyIn:
-                case InterlockAllows.MasterKeyOutReverserNonKeyOut:
                     return -1;
-                case InterlockAllows.ReverserKeyOutMasterControllerNonEmergency:
-                case InterlockAllows.MasterControllerEmergency:
+                case InterlockAllows.MasterKeyOutMasterControllerNonEmergency:
+                case InterlockAllows.ReverserNonKeyOutMasterControllerEmergency:
                     return cv;
+                case InterlockAllows.ReverserKeyOut:
+                    return Math.max(cv, -0.9);
                 case undefined:
                     return undefined;
             }
@@ -194,12 +195,11 @@ const me = new FrpEngine(() => {
         frp.map(cv => {
             switch (frp.snapshot(interlockState)) {
                 case InterlockAllows.MasterKeyIn:
+                case InterlockAllows.MasterKeyOutMasterControllerNonEmergency:
                     return 3;
-                case InterlockAllows.MasterKeyOutReverserNonKeyOut:
-                case InterlockAllows.ReverserKeyOutMasterControllerNonEmergency:
+                case InterlockAllows.ReverserNonKeyOutMasterControllerEmergency:
+                case InterlockAllows.ReverserKeyOut:
                     return cv;
-                case InterlockAllows.MasterControllerEmergency:
-                    return Math.min(cv, 2);
                 case undefined:
                     return undefined;
             }
@@ -214,10 +214,10 @@ const me = new FrpEngine(() => {
         frp.map(cv => {
             switch (frp.snapshot(interlockState)) {
                 case InterlockAllows.MasterKeyIn:
-                case InterlockAllows.MasterKeyOutReverserNonKeyOut:
+                case InterlockAllows.MasterKeyOutMasterControllerNonEmergency:
                     return cv;
-                case InterlockAllows.ReverserKeyOutMasterControllerNonEmergency:
-                case InterlockAllows.MasterControllerEmergency:
+                case InterlockAllows.ReverserNonKeyOutMasterControllerEmergency:
+                case InterlockAllows.ReverserKeyOut:
                     return 1;
                 case undefined:
                     return undefined;
