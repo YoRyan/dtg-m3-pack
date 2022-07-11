@@ -89,6 +89,17 @@ enum BrakeLight {
     Dark,
 }
 
+type WiperUpdate = [setting: WiperMode, dt: number];
+type WiperAccum = [mode: WiperMode, cycleS: number];
+enum WiperMode {
+    Int3,
+    Int2,
+    Int1,
+    Off,
+    Low,
+    High,
+}
+
 const me = new FrpEngine(() => {
     // Useful streams and behaviors
     const speedoMph$ = frp.compose(me.createPlayerWithKeyUpdateStream(), me.mapGetCvStream("SpeedometerMPH", 0));
@@ -1125,6 +1136,114 @@ const me = new FrpEngine(() => {
         me.rv.ActivateNode("SL_blue", false);
     });
 
+    // Wiper control
+    const aiWiperUpdate$ = frp.compose(
+        me.createAiUpdateStream(),
+        frp.map((au): WiperUpdate => {
+            const [frontCoupled] = au.couplings;
+            const isRaining = rw.WeatherController.GetPrecipitationDensity() > 0;
+            const setting =
+                isRaining && au.direction === SensedDirection.Forward && !frontCoupled ? WiperMode.Low : WiperMode.Off;
+            return [setting, au.dt];
+        })
+    );
+    const leadWiperUpdate$ = frp.compose(
+        me.createPlayerWithKeyUpdateStream(),
+        frp.map((pu): WiperUpdate => {
+            const cv = me.rv.GetControlValue("Wipers", 0) as number;
+            return [readWiperSetting(cv), pu.dt];
+        })
+    );
+    const helperWiperUpdate$ = frp.compose(
+        me.createPlayerWithoutKeyUpdateStream(),
+        frp.map((pu): WiperUpdate => [WiperMode.Off, pu.dt])
+    );
+    const wiperPosition$ = frp.compose(
+        aiWiperUpdate$,
+        frp.merge(leadWiperUpdate$),
+        frp.merge(helperWiperUpdate$),
+        frp.fold<WiperAccum, WiperUpdate>(
+            ([mode, cycleS], [setting, dt]) => {
+                if (
+                    mode === setting ||
+                    (mode === WiperMode.Int3 && cycleS > 8) ||
+                    (mode === WiperMode.Int2 && cycleS > 5) ||
+                    (mode === WiperMode.Int1 && cycleS > 2) ||
+                    (mode === WiperMode.Low && cycleS > 0) ||
+                    (mode === WiperMode.High && cycleS > 0)
+                ) {
+                    const wrapS = {
+                        [WiperMode.Int3]: 8 + 2,
+                        [WiperMode.Int2]: 5 + 2,
+                        [WiperMode.Int1]: 2 + 2,
+                        [WiperMode.Off]: 0,
+                        [WiperMode.Low]: 2,
+                        [WiperMode.High]: 1.6,
+                    }[mode];
+                    const nextS = cycleS + dt;
+                    return [mode, nextS < wrapS ? nextS : 0];
+                } else {
+                    return [setting, 0];
+                }
+            },
+            [WiperMode.Off, 0]
+        ),
+        frp.map(([mode, cycleS]) => {
+            if (mode === WiperMode.Int3) {
+                if (cycleS >= 9) {
+                    return 10 - cycleS;
+                } else if (cycleS >= 8) {
+                    return cycleS - 8;
+                } else {
+                    return 0;
+                }
+            } else if (mode === WiperMode.Int2) {
+                if (cycleS >= 6) {
+                    return 7 - cycleS;
+                } else if (cycleS >= 5) {
+                    return cycleS - 5;
+                } else {
+                    return 0;
+                }
+            } else if (mode === WiperMode.Int1) {
+                if (cycleS >= 3) {
+                    return 4 - cycleS;
+                } else if (cycleS >= 2) {
+                    return cycleS - 2;
+                } else {
+                    return 0;
+                }
+            } else if (mode === WiperMode.Low) {
+                return cycleS >= 1 ? 2 - cycleS : cycleS;
+            } else if (mode === WiperMode.High) {
+                return (cycleS >= 0.8 ? 1.6 - cycleS : cycleS) * 1.25;
+            } else {
+                return 0;
+            }
+        })
+    );
+    wiperPosition$(pos => {
+        me.rv.SetTime("ext_wipers", pos);
+        me.rv.SetControlValue("WipersPosition", 0, pos);
+    });
+
+    // Sync virtual and in-cab wiper controls.
+    const hudWiperChange$ = frp.compose(
+        me.createOnCvChangeStreamFor("VirtualWipers", 0),
+        frp.filter(cv => cv <= 0 || cv >= 1),
+        frp.map(cv => cv >= 1)
+    );
+    const cabWiperChange$ = frp.compose(
+        me.createOnCvChangeStreamFor("Wipers", 0),
+        frp.map(cv => readWiperSetting(cv))
+    );
+    hudWiperChange$(on => {
+        me.rv.SetControlValue("Wipers", 0, on ? 0.2 : 0); // low/off
+    });
+    cabWiperChange$(setting => {
+        me.rv.SetControlValue("VirtualWipers", 0, setting === WiperMode.Off ? 0 : 1);
+    });
+
     // Destination board selector
     const previousDest$ = frp.compose(
         me.createPlayerWithKeyUpdateStream(),
@@ -1248,4 +1367,20 @@ function airBrakeServiceRange(speedMps: number, application: number) {
         proportion = 0;
     }
     return Math.max((((maxService - minService) / (1 - 0)) * (application - 0) + minService) * proportion, floor);
+}
+
+function readWiperSetting(cv: number) {
+    if (cv < -0.5) {
+        return WiperMode.Int3;
+    } else if (cv < -0.3) {
+        return WiperMode.Int2;
+    } else if (cv < -0.1) {
+        return WiperMode.Int1;
+    } else if (cv < 0.1) {
+        return WiperMode.Off;
+    } else if (cv < 0.3) {
+        return WiperMode.Low;
+    } else {
+        return WiperMode.High;
+    }
 }
