@@ -36,7 +36,8 @@ type AscAccum =
           initAspect: cs.LirrAspect,
           initSpeedMps: number,
           stopwatchS: number,
-          acknowledged: boolean
+          acknowledged: boolean,
+          brakeAssurance: boolean
       ]
     | AscMode.Emergency;
 enum AscMode {
@@ -160,7 +161,7 @@ export function create(
                 if (e === AscEventType.Overspeed) {
                     // Move to the overspeed state.
                     const [, initAspect, initSpeedMps] = event;
-                    return [AscMode.Overspeed, initAspect, initSpeedMps, 0, false];
+                    return [AscMode.Overspeed, initAspect, initSpeedMps, 0, false, false];
                 }
 
                 // Just a clock update; do nothing.
@@ -179,7 +180,7 @@ export function create(
                 if (e === AscEventType.Overspeed) {
                     // An overspeed overrides the downgrade timer.
                     const [, initAspect, initSpeedMps] = event;
-                    return [AscMode.Overspeed, initAspect, initSpeedMps, 0, false];
+                    return [AscMode.Overspeed, initAspect, initSpeedMps, 0, false, false];
                 }
 
                 // Clock update; move to another state if warranted, or add
@@ -210,7 +211,7 @@ export function create(
 
                 // Clock update; move to another state if warranted, or trip
                 // the acknowledgement flag and add time to the stopwatch.
-                const [, initAspect, initSpeedMps, stopwatchS, ack] = accum;
+                const [, initAspect, initSpeedMps, stopwatchS, ack, ba] = accum;
                 const theAspect = frp.snapshot(theCabAspect);
                 const underSpeed =
                     theAspect === undefined || frp.snapshot(aSpeedMps) < toUnderspeedSetpointMps(theAspect);
@@ -222,7 +223,7 @@ export function create(
 
                 // Brake assurance rate check
                 const brakeAssuranceTimeS = toBrakeAssuranceTimeS(initAspect, initSpeedMps);
-                const brakeAssurance = isBrakeAssurance(initAspect, initSpeedMps) ?? true;
+                const brakeAssurance = ba || (isBrakeAssurance(initAspect, initSpeedMps) ?? true);
                 // Be extra generous with the brake assurance time period, as
                 // it's a video game...
                 if (brakeAssuranceTimeS !== undefined && stopwatchS > brakeAssuranceTimeS * 3 && !brakeAssurance) {
@@ -232,7 +233,7 @@ export function create(
                 } else {
                     // Update stopwatch and acknowledgement states.
                     const [, dt] = event;
-                    return [AscMode.Overspeed, initAspect, initSpeedMps, stopwatchS + dt, acked];
+                    return [AscMode.Overspeed, initAspect, initSpeedMps, stopwatchS + dt, acked, brakeAssurance];
                 }
             }
         }, AscMode.Normal),
@@ -287,15 +288,14 @@ export function create(
             }
 
             // Overspeed state
-            const [, initAspect, initSpeedMps, , ack] = accum;
-            const brakeAssurance = isBrakeAssurance(initAspect, initSpeedMps);
-            const satisfied = (brakeAssurance ?? true) && ack && frp.snapshot(coastOrBrake);
+            const [, initAspect, , , ack, ba] = accum;
+            const satisfied = ack && ba && frp.snapshot(coastOrBrake);
             return {
                 brakes: AscBrake.Penalty,
                 alarm: !satisfied,
                 overspeed: frp.snapshot(aSpeedMps) > toUnderspeedSetpointMps(initAspect),
-                atcForestall: !(brakeAssurance ?? false),
-                brakeAssurance: brakeAssurance ?? false,
+                atcForestall: !ba,
+                brakeAssurance: ba && initAspect !== cs.LirrAspect.Speed15,
             };
         })
     );
