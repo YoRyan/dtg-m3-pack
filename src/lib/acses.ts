@@ -516,6 +516,10 @@ function createTrackSpeedStream(
             // track speed.
             frp.merge(e.createPlayerWithKeyUpdateStream()),
             frp.fold<TrackSpeedChangeAccum, number | PlayerUpdate>((accum, input) => {
+                if (frp.snapshot(reset)) {
+                    return undefined;
+                }
+
                 // New speed
                 if (typeof input === "number") {
                     const speedMps = input;
@@ -542,7 +546,7 @@ function createTrackSpeedStream(
                 }
             }, undefined),
             frp.map(accum => {
-                const [savedSpeedMps] = accum as [number, number];
+                const [savedSpeedMps] = accum ?? [0];
                 return savedSpeedMps;
             })
         );
