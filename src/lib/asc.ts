@@ -100,8 +100,9 @@ export function create(
     const theCabAspect = frp.stepper(cabAspect, undefined);
     const isBrakeAssurance = (aspect: cs.LirrAspect, speedMps: number) => {
         const rateMps2 = toBrakeAssuranceRateMps2(aspect, speedMps);
-        const accelMps2 = e.rv.GetAcceleration() * (e.rv.GetSpeed() > 0 ? 1 : -1);
-        return rateMps2 !== undefined ? accelMps2 < rateMps2 : undefined;
+        // Acceleration isn't reliable - it's reversed when switching ends of
+        // the train, and there's no easy way to tell whether it is.
+        return rateMps2 !== undefined ? -math.abs(e.rv.GetAcceleration()) < rateMps2 : undefined;
     };
 
     const isOverspeed = frp.liftN(
@@ -222,7 +223,9 @@ export function create(
                 // Brake assurance rate check
                 const brakeAssuranceTimeS = toBrakeAssuranceTimeS(initAspect, initSpeedMps);
                 const brakeAssurance = isBrakeAssurance(initAspect, initSpeedMps) ?? true;
-                if (brakeAssuranceTimeS !== undefined && stopwatchS > brakeAssuranceTimeS && !brakeAssurance) {
+                // Be extra generous with the brake assurance time period, as
+                // it's a video game...
+                if (brakeAssuranceTimeS !== undefined && stopwatchS > brakeAssuranceTimeS * 3 && !brakeAssurance) {
                     // Brake assurance timer has elapsed; apply emergency
                     // braking.
                     return AscMode.Emergency;
