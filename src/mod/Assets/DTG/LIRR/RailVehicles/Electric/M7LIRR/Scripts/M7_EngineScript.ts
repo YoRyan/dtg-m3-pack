@@ -824,8 +824,8 @@ const me = new FrpEngine(() => {
                 }
             },
             // TrainBrakeControl refuses to cooperate in a save/resume, so just
-            // default to no brakes.
-            () => 0
+            // default to no brakes if already moving.
+            () => (me.rv.GetSpeed() > c.stopSpeed ? 0 : airBrakeChargeThreshold)
         ),
         frp.hub()
     );
