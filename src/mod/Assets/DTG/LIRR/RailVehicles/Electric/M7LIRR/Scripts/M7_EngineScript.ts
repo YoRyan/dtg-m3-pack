@@ -81,6 +81,7 @@ enum HeadLight {
     Off,
     Dim,
     Bright,
+    BrightAi,
 }
 
 enum BrakeLight {
@@ -914,12 +915,18 @@ const me = new FrpEngine(() => {
         new rw.Light("Headlight_Bright_AuxL"),
         new rw.Light("Headlight_Bright_AuxR"),
     ];
+    const aiLights = [
+        new rw.Light("Headlight_AI_L"),
+        new rw.Light("Headlight_AI_R"),
+        new rw.Light("Headlight_AI_AuxL"),
+        new rw.Light("Headlight_AI_AuxR"),
+    ];
     const aiHeadlights$ = frp.compose(
         me.createAiUpdateStream(),
         frp.map(au => {
             if (au.direction === SensedDirection.Forward) {
                 const [frontCoupled] = au.couplings;
-                return frontCoupled ? HeadLight.Off : HeadLight.Bright;
+                return frontCoupled ? HeadLight.Off : HeadLight.BrightAi;
             } else {
                 return HeadLight.Off;
             }
@@ -949,6 +956,9 @@ const me = new FrpEngine(() => {
         }
         for (const light of brightLights) {
             light.Activate(setting === HeadLight.Bright);
+        }
+        for (const light of aiLights) {
+            light.Activate(setting === HeadLight.BrightAi);
         }
     });
 
