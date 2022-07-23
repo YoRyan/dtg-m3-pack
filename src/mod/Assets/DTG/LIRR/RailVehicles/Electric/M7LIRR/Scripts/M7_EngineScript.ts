@@ -1070,7 +1070,7 @@ const me = new FrpEngine(() => {
     }
     const aiExteriorPassLights$ = frp.compose(
         me.createAiUpdateStream(),
-        frp.map(au => au.direction !== SensedDirection.None)
+        frp.map(_ => false)
     );
     const playerExteriorPassLights$ = frp.compose(
         me.createPlayerUpdateStream(),
