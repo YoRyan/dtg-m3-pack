@@ -1302,6 +1302,16 @@ const me = new FrpEngine(() => {
         nextDest$
     );
 
+    // Hide passengers if the "No Passengers" destination is selected.
+    const passengers = new rw.RenderedEntity("Passengers");
+    const showPassengers$ = frp.compose(
+        me.createUpdateStream(),
+        frp.map(_ => string.sub(me.rv.GetRVNumber(), 1, 1) !== "z")
+    );
+    showPassengers$(show => {
+        passengers.ActivateNode("all", show);
+    });
+
     // Ambient sounds (HVAC, etc.)
     me.rv.SetControlValue("AmbientSound", 0, 1);
 
