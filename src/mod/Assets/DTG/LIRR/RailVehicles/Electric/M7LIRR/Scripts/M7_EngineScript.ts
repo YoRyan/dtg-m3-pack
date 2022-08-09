@@ -1348,17 +1348,10 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("VirtualPantographControl", 0, 0);
     });
 
-    // Force the bell to be a one-shot control.
-    const onBellChange$ = me.createOnCvChangeStreamFor("Bell", 0);
-    onBellChange$(cv => {
-        me.rv.SetControlValue("Bell", 0, cv < 1 ? cv : 0);
-    });
-
     // Process OnControlValueChange events.
     const onCvChange$ = frp.compose(
         me.createOnCvChangeStream(),
-        frp.reject(([name]) => name === "MasterKey" || name === "UserVirtualReverser" || name === "ThrottleAndBrake"),
-        frp.reject(([name]) => name === "Bell")
+        frp.reject(([name]) => name === "MasterKey" || name === "UserVirtualReverser" || name === "ThrottleAndBrake")
     );
     onCvChange$(([name, index, value]) => me.rv.SetControlValue(name, index, value));
 
