@@ -1,17 +1,17 @@
 /** @noSelfInFile */
 
-import * as acses from "../../../../../../../../lib/acses";
-import * as ale from "../../../../../../../../lib/alerter";
-import * as asc from "../../../../../../../../lib/asc";
-import * as cs from "../../../../../../../../lib/cabsignals";
-import * as c from "../../../../../../../../lib/constants";
-import * as dest from "../../../../../../../../lib/destinations";
-import * as frp from "../../../../../../../../lib/frp";
-import { FrpEngine } from "../../../../../../../../lib/frp-engine";
-import { fsm, mapBehavior, rejectUndefined } from "../../../../../../../../lib/frp-extra";
-import { PlayerUpdate, SensedDirection, VehicleCamera } from "../../../../../../../../lib/frp-vehicle";
-import * as m from "../../../../../../../../lib/math";
-import * as rw from "../../../../../../../../lib/railworks";
+import * as acses from "lib/acses";
+import * as ale from "lib/alerter";
+import * as asc from "lib/asc";
+import * as cs from "lib/cabsignals";
+import * as c from "lib/constants";
+import * as dest from "lib/destinations";
+import * as frp from "lib/frp";
+import { FrpEngine } from "lib/frp-engine";
+import { fsm, mapBehavior, rejectUndefined } from "lib/frp-extra";
+import { PlayerUpdate, SensedDirection, VehicleCamera } from "lib/frp-vehicle";
+import * as m from "lib/math";
+import * as rw from "lib/railworks";
 
 enum ControlEvent {
     Autostart,
