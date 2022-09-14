@@ -10,8 +10,12 @@ import path from "path";
 import ts from "typescript";
 import tstl from "typescript-to-lua";
 
-export default async function() {
+export default async function () {
     watch(["src/mod/**/*.ts", "src/lib/**/*.ts"], scripts);
+}
+
+export async function all() {
+    await scripts();
 }
 
 export async function scripts() {
@@ -22,7 +26,12 @@ export async function scripts() {
                     return stream
                         .pipe(src(["src/@types/**/*", "src/lib/**/*.ts"], { base: "src" }))
                         .pipe(
-                            src(["node_modules/lua-types/**/*", "node_modules/typescript-to-lua/**/*"], { base: "." })
+                            src(
+                                ["@typescript-to-lua", "lua-types", "typescript-to-lua"].map(
+                                    p => `node_modules/${p}/**/*`
+                                ),
+                                { base: "." }
+                            )
                         )
                         .pipe(
                             intermediate({}, async function (tempDir, cb) {
@@ -43,15 +52,21 @@ export async function scripts() {
 }
 
 async function transpileTypeScriptToLua(tempDir, luaPath) {
-    // We need the root tsconfig.json node to set the value of "include".
     const tsconfig = path.join(tempDir, "tsconfig.json");
-    await writeFile(tsconfig, `{ "include": ["${path.join(tempDir, "@types")}", "${path.join(tempDir, "mod")}"] }`);
+    // We need the root tsconfig.json node to set the value of "include".
+    await writeFile(
+        tsconfig,
+        JSON.stringify({
+            include: [path.join(tempDir, "@types"), path.join(tempDir, "mod")],
+        })
+    );
 
     const result = tstl.transpileProject(tsconfig, {
         target: ts.ScriptTarget.ESNext,
         moduleResolution: ts.ModuleResolutionKind.NodeJs,
         types: ["lua-types/5.0"],
         strict: true,
+        baseUrl: tempDir,
         typeRoots: [path.join(tempDir, "@types")],
         luaTarget: tstl.LuaTarget.Lua50,
         luaLibImport: tstl.LuaLibImportKind.Inline,
