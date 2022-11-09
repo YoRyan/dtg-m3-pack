@@ -4,9 +4,10 @@
     "lint": "prettier --check .",
     "fix:prettier": "prettier --write .",
     "watch": "gulp",
-    "build": "gulp all"
+    "build": "gulp typescript"
   },
   "dependencies": {
+    "glob-intersection": "^0.1.3",
     "gulp": "^4.0.2",
     "gulp-execa": "^4.1.0",
     "gulp-filter": "^7.0.0",
@@ -14,9 +15,10 @@
     "gulp-intermediate": "^5.0.0",
     "gulp-rename": "^2.0.0",
     "lua-types": "^2.13.0",
+    "minimist": "^1.2.6",
     "npx": "^10.2.2",
     "typescript": "^4.7.4",
-    "typescript-to-lua": "^1.10.0"
+    "typescript-to-lua": "^1.10.1"
   },
   "devDependencies": {
     "@types/jest": "^27.5.2",
