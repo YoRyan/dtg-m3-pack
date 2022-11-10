@@ -5,7 +5,6 @@ import * as ale from "lib/alerter";
 import * as asc from "lib/asc";
 import * as cs from "lib/cabsignals";
 import * as c from "lib/constants";
-import * as dest from "lib/destinations";
 import * as frp from "lib/frp";
 import { FrpEngine } from "lib/frp-engine";
 import { fsm, mapBehavior, rejectUndefined } from "lib/frp-extra";
@@ -1247,54 +1246,6 @@ const me = new FrpEngine(() => {
     cabWiperChange$(setting => {
         me.rv.SetControlValue("VirtualWipers", 0, setting === WiperMode.Off ? 0 : 1);
     });
-
-    // Destination board selector
-    const previousDest$ = frp.compose(
-        me.createPlayerWithKeyUpdateStream(),
-        me.mapGetCvStream("DecreaseDestination", 0),
-        frp.filter(cv => cv > 0.5),
-        frp.throttle(250)
-    );
-    const nextDest$ = frp.compose(
-        me.createPlayerWithKeyUpdateStream(),
-        me.mapGetCvStream("IncreaseDestination", 0),
-        frp.filter(cv => cv > 0.5),
-        frp.throttle(250)
-    );
-    dest.setup(
-        me,
-        [
-            ["a", "(Blank)"],
-            ["b", "Atlantic Terminal Bklyn"],
-            ["c", "Belmont Park"],
-            ["d", "Hempstead"],
-            ["e", "Hicksville"],
-            ["f", "Hunterspoint Ave."],
-            ["g", "Jamaica"],
-            ["h", "Long Island City"],
-            ["i", "Penn Station"],
-            ["j", "Babylon"],
-            ["k", "Brentwood"],
-            ["l", "East Williston"],
-            ["m", "Far Rockaway"],
-            ["n", "Farmingdale"],
-            ["o", "Freeport"],
-            ["p", "Grand Central"],
-            ["q", "Great Neck"],
-            ["r", "Huntington"],
-            ["s", "Long Beach"],
-            ["t", "Massapequa"],
-            ["u", "Mets-Willets Point"],
-            ["v", "Port Washington"],
-            ["w", "Ronkonkoma"],
-            ["x", "Valley Stream"],
-            ["y", "West Hempstead"],
-            ["z", "No Passengers"],
-            ["A", "Special"],
-        ],
-        previousDest$,
-        nextDest$
-    );
 
     // Hide passengers if the "No Passengers" destination is selected.
     const passengers = new rw.RenderedEntity("Passengers");
