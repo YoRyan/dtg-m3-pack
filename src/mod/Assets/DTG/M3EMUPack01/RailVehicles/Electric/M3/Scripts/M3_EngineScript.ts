@@ -927,16 +927,8 @@ const me = new FrpEngine(() => {
     );
     const leadHeadlights$ = frp.compose(
         me.createPlayerWithKeyUpdateStream(),
-        frp.map(_ => {
-            const cv = me.rv.GetControlValue("Headlights", 0) as number;
-            if (cv > 1.5) {
-                return HeadLight.Bright;
-            } else if (cv > 0.5) {
-                return HeadLight.Dim;
-            } else {
-                return HeadLight.Off;
-            }
-        })
+        me.mapGetCvStream("Headlights", 0),
+        frp.map(readHeadlightSetting)
     );
     const helperHeadlights$ = frp.compose(
         me.createPlayerWithoutKeyUpdateStream(),
@@ -1273,6 +1265,55 @@ const me = new FrpEngine(() => {
     );
     onCvChange$(([name, index, value]) => me.rv.SetControlValue(name, index, value));
 
+    // Sync headlight controls.
+    const setVirtualHeadlights$ = frp.compose(
+        me.createOnCvChangeStreamFor("Headlights", 0),
+        frp.filter(v => v === Math.floor(v)),
+        frp.map(readHeadlightSetting),
+        frp.map(hl => {
+            switch (hl) {
+                case HeadLight.Off:
+                    return 0;
+                case HeadLight.Dim:
+                    return 1;
+                case HeadLight.Bright:
+                    return 2;
+            }
+        })
+    );
+    setVirtualHeadlights$(v => {
+        me.rv.SetControlValue("VirtualHeadlights", 0, v);
+    });
+    const setHeadlights$ = frp.compose(
+        me.createOnCvChangeStreamFor("VirtualHeadlights", 0),
+        frp.map(cv => {
+            switch (cv) {
+                case 2:
+                    return HeadLight.Bright;
+                case 1:
+                    return HeadLight.Dim;
+                case 0:
+                    return HeadLight.Off;
+                default:
+                    return undefined;
+            }
+        }),
+        rejectUndefined(),
+        frp.map(hl => {
+            switch (hl) {
+                case HeadLight.Dim:
+                    return 0;
+                case HeadLight.Off:
+                    return 1;
+                case HeadLight.Bright:
+                    return 2;
+            }
+        })
+    );
+    setHeadlights$(v => {
+        me.rv.SetControlValue("Headlights", 0, v);
+    });
+
     // Enable updates.
     me.activateUpdatesEveryFrame(true);
 });
@@ -1305,6 +1346,16 @@ function airBrakeServiceRange(speedMps: number, application: number) {
         proportion = 0;
     }
     return Math.max((((maxService - minService) / (1 - 0)) * (application - 0) + minService) * proportion, floor);
+}
+
+function readHeadlightSetting(cv: number) {
+    if (cv > 1.5) {
+        return HeadLight.Bright;
+    } else if (cv > 0.5) {
+        return HeadLight.Off;
+    } else {
+        return HeadLight.Dim;
+    }
 }
 
 function readWiperSetting(cv: number) {
