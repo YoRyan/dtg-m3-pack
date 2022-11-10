@@ -1349,14 +1349,6 @@ const me = new FrpEngine(() => {
     );
     onCvChange$(([name, index, value]) => me.rv.SetControlValue(name, index, value));
 
-    // The default AbsoluteSpeed controller for sounds isn't entirely reliable,
-    // so replace it with our own.
-    const speedForSounds$ = frp.compose(
-        me.createUpdateStream(),
-        frp.map(_ => Math.abs(me.rv.GetSpeed()))
-    );
-    speedForSounds$(v => me.rv.SetControlValue("AbsoluteSpeed", 0, v));
-
     // Enable updates.
     me.activateUpdatesEveryFrame(true);
 });
