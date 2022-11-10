@@ -989,51 +989,39 @@ const me = new FrpEngine(() => {
         }
     });
 
-    // Doors open status indicator and hallway lights
+    // Door hallway lights
     const hallLights = [new rw.Light("HallLight_001"), new rw.Light("HallLight_002")];
-    const aiIsStopped$ = frp.compose(
+    const hallLightsPlayer$ = frp.compose(
+        me.createPlayerUpdateStream(),
+        frp.map(pu => {
+            const [l, r] = pu.doorsOpen;
+            return l || r;
+        })
+    );
+    const hallLights$ = frp.compose(
         me.createAiUpdateStream(),
-        frp.map(au => au.isStopped)
+        frp.map(_ => false),
+        frp.merge(hallLightsPlayer$)
     );
-    const playerAnyDoorOpen$ = frp.compose(
-        me.createPlayerUpdateStream(),
-        frp.map(pu => {
-            const [left, right] = pu.doorsOpen;
-            return left || right;
-        })
-    );
-    const playerLeftDoorOpen$ = frp.compose(
-        me.createPlayerUpdateStream(),
-        frp.map(pu => {
-            const [left] = pu.doorsOpen;
-            return left;
-        })
-    );
-    const playerRightDoorOpen$ = frp.compose(
-        me.createPlayerUpdateStream(),
-        frp.map(pu => {
-            const [, right] = pu.doorsOpen;
-            return right;
-        })
-    );
-    aiIsStopped$(stopped => {
-        me.rv.ActivateNode("SL_doors_L", stopped);
-        me.rv.ActivateNode("SL_doors_R", stopped);
+    hallLights$(on => {
         for (const light of hallLights) {
-            light.Activate(false);
+            light.Activate(on);
         }
     });
-    playerAnyDoorOpen$(open => {
-        me.rv.SetControlValue("DoorsState", 0, open ? 1 : 0);
-        for (const light of hallLights) {
-            light.Activate(open);
-        }
-    });
-    playerLeftDoorOpen$(open => {
-        me.rv.ActivateNode("SL_doors_L", open);
-    });
-    playerRightDoorOpen$(open => {
-        me.rv.ActivateNode("SL_doors_R", open);
+
+    // Door status lights
+    const doorLightsPlayer$ = frp.compose(
+        me.createPlayerUpdateStream(),
+        frp.map((pu): [boolean, boolean] => pu.doorsOpen)
+    );
+    const doorLights$ = frp.compose(
+        me.createAiUpdateStream(),
+        frp.map((au): [boolean, boolean] => [au.isStopped, au.isStopped]),
+        frp.merge(doorLightsPlayer$)
+    );
+    doorLights$(([l, r]) => {
+        me.rv.ActivateNode("SL_doors_L", l);
+        me.rv.ActivateNode("SL_doors_R", r);
     });
 
     // Pantograph gate
@@ -1066,28 +1054,11 @@ const me = new FrpEngine(() => {
         cabLight.Activate(on);
     });
 
-    // Passenger cabin lights for outside views
-    let exteriorPassLights: rw.Light[] = [];
-    for (let i = 1; i <= 9; i++) {
-        exteriorPassLights.push(new rw.Light(`RoomLight_0${i}`));
-    }
-    const aiExteriorPassLights$ = frp.compose(
-        me.createAiUpdateStream(),
-        frp.map(_ => false)
-    );
-    const playerExteriorPassLights$ = frp.compose(
-        me.createPlayerUpdateStream(),
-        frp.map(_ => true)
-    );
-    const exteriorPassLightsOn$ = frp.compose(aiExteriorPassLights$, frp.merge(playerExteriorPassLights$));
-    exteriorPassLightsOn$(on => {
-        for (const light of exteriorPassLights) {
-            light.Activate(on);
-        }
-    });
-
     // Passenger cabin lights for the passenger view
-    const interiorPassLight = new rw.Light("RoomLight_PassView");
+    let interiorPassLights = [new rw.Light("RoomLight_PassView")];
+    for (let i = 1; i <= 9; i++) {
+        interiorPassLights.push(new rw.Light(`RoomLight_0${i}`));
+    }
     const isPassView$ = frp.compose(
         me.createOnCameraStream(),
         frp.map(vc => vc === VehicleCamera.Carriage)
@@ -1103,7 +1074,9 @@ const me = new FrpEngine(() => {
     );
     const interiorPassLightOn$ = frp.compose(noInteriorPassLight$, frp.merge(playerInteriorPassLight$));
     interiorPassLightOn$(on => {
-        interiorPassLight.Activate(on);
+        for (const light of interiorPassLights) {
+            light.Activate(on);
+        }
     });
 
     // Brake cylinder status lights
