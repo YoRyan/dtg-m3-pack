@@ -14,6 +14,8 @@ export class FrpEntity {
     public e = new rw.ScriptedEntity("");
 
     private updateSource = new FrpSource<number>();
+    private readonly saveSource = new FrpSource<void>();
+    private readonly resumeSource = new FrpSource<void>();
 
     private onInit: (this: void) => void;
     private updatingEveryFrame = false;
@@ -26,8 +28,28 @@ export class FrpEntity {
         this.onInit = onInit;
     }
 
+    /**
+     * Create an event stream of frame times from the Update() callback.
+     * @returns The new stream of numbers.
+     */
     createUpdateStream() {
         return this.updateSource.createStream();
+    }
+
+    /**
+     * Create an event stream from the OnSave() callback.
+     * @returns The new stream.
+     */
+    createOnSaveStream() {
+        return this.saveSource.createStream();
+    }
+
+    /**
+     * Create an event stream from the OnResume() callback.
+     * @returns The new stream.
+     */
+    createOnResumeStream() {
+        return this.resumeSource.createStream();
     }
 
     /**
@@ -42,6 +64,8 @@ export class FrpEntity {
                 this.e.EndUpdate();
             }
         };
+        OnSave = () => this.saveSource.call();
+        OnResume = () => this.resumeSource.call();
     }
 
     /**

@@ -305,25 +305,19 @@ const me = new FrpEngine(() => {
     };
 
     // Pulse code cab signaling
-    const cabSignalFromMessage$ = frp.compose(
+    const cabSignalResume$ = frp.compose(
+        me.createOnResumeStream(),
+        frp.map(_ => {
+            const cv = me.rv.GetControlValue("LirrAspect", 0) as number;
+            return cv as cs.LirrAspect;
+        })
+    );
+    const cabSignal$ = frp.compose(
         me.createOnSignalMessageStream(),
         frp.map(msg => cs.toPulseCode(msg)),
         rejectUndefined(),
-        frp.map(pc => cs.toLirrAspect(pc))
-    );
-    const cabSignalFromMessage = frp.stepper(cabSignalFromMessage$, undefined);
-    const cabSignal$ = frp.compose(
-        me.createPlayerWithKeyUpdateStream(),
-        me.foldAfterSettled(
-            // If we've received a code from a signal message, that should
-            // override the initial/save game value.
-            accum => frp.snapshot(cabSignalFromMessage) ?? accum,
-            () => me.rv.GetControlValue("LirrAspect", 0) as cs.LirrAspect
-        ),
-        // It's important that our events only signal actual code changes.
-        fsm<undefined | cs.LirrAspect>(undefined),
-        frp.filter(([from, to]) => from !== to),
-        frp.map(([, to]) => to as cs.LirrAspect),
+        frp.map(pc => cs.toLirrAspect(pc)),
+        frp.merge(cabSignalResume$),
         frp.hub()
     );
     const cabSignalEvent$ = frp.compose(
