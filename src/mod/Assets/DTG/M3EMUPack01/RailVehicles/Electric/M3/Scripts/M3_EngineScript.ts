@@ -1016,19 +1016,6 @@ const me = new FrpEngine(() => {
         me.rv.ActivateNode("SL_doors_R", r);
     });
 
-    // Pantograph gate
-    const pantoGate$ = frp.compose(
-        me.createPlayerUpdateStream(),
-        frp.merge(me.createAiUpdateStream()),
-        frp.map(u => {
-            const [frontCoupled] = u.couplings;
-            return frontCoupled ? u.dt : -u.dt;
-        })
-    );
-    pantoGate$(dt => {
-        me.rv.AddTime("ribbons", dt);
-    });
-
     // Cab dome light
     const cabLight = new rw.Light("Cablight");
     const noCabLight$ = frp.compose(
