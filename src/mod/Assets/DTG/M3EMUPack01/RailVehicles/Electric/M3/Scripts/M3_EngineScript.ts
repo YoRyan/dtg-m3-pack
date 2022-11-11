@@ -854,45 +854,16 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("VirtualEmergencyBrake", 0, 0); // Reset if tripped
     });
 
-    // Operating display indicators
-    const nMultipleUnits$ = frp.compose(me.createPlayerWithKeyUpdateStream(), mapBehavior(nMultipleUnits));
-    nMultipleUnits$(n => {
-        me.rv.SetControlValue("Cars", 0, n);
-    });
-
-    // Driving display indicators
-    const speedoMphDigits$ = frp.compose(speedoMph$, threeDigitDisplay);
-    const brakePipePsiDigits$ = frp.compose(brakePipePsi$, threeDigitDisplay);
-    const brakeCylinderPsiDigits$ = frp.compose(
-        me.createPlayerWithKeyUpdateStream(),
-        me.mapGetCvStream("TrainBrakeCylinderPressurePSI", 0),
-        threeDigitDisplay
+    // Speedometer
+    const speedoMphDigits$ = frp.compose(
+        speedoMph$,
+        frp.map(n => Math.round(Math.abs(n))),
+        frp.map(n => m.digits(n, 3))
     );
-    speedoMphDigits$(([digits, guide]) => {
+    speedoMphDigits$(([digits]) => {
         me.rv.SetControlValue("SpeedoHundreds", 0, digits[0]);
         me.rv.SetControlValue("SpeedoTens", 0, digits[1]);
         me.rv.SetControlValue("SpeedoUnits", 0, digits[2]);
-        me.rv.SetControlValue("SpeedoGuide", 0, guide);
-    });
-    brakePipePsiDigits$(([digits, guide]) => {
-        me.rv.SetControlValue("PipeHundreds", 0, digits[0]);
-        me.rv.SetControlValue("PipeTens", 0, digits[1]);
-        me.rv.SetControlValue("PipeUnits", 0, digits[2]);
-        me.rv.SetControlValue("PipeGuide", 0, guide);
-    });
-    brakeCylinderPsiDigits$(([digits, guide]) => {
-        me.rv.SetControlValue("CylinderHundreds", 0, digits[0]);
-        me.rv.SetControlValue("CylinderTens", 0, digits[1]);
-        me.rv.SetControlValue("CylinderUnits", 0, digits[2]);
-        me.rv.SetControlValue("CylGuide", 0, guide);
-    });
-    emergencyBrake$(bie => {
-        me.rv.SetControlValue("EmergencyBrakesIndicator", 0, bie ? 1 : 0);
-    });
-
-    // Screens on/off
-    hasPower$(power => {
-        me.rv.SetControlValue("ScreensOff", 0, !power ? 1 : 0);
     });
 
     // Headlight control
@@ -1199,16 +1170,6 @@ const me = new FrpEngine(() => {
         me.rv.SetControlValue("VirtualWipers", 0, setting === WiperMode.Off ? 0 : 1);
     });
 
-    // Hide passengers if the "No Passengers" destination is selected.
-    const passengers = new rw.RenderedEntity("Passengers");
-    const showPassengers$ = frp.compose(
-        me.createUpdateStream(),
-        frp.map(_ => string.sub(me.rv.GetRVNumber(), 1, 1) !== "z")
-    );
-    showPassengers$(show => {
-        passengers.ActivateNode("all", show);
-    });
-
     // Ambient sounds (HVAC, etc.)
     me.rv.SetControlValue("AmbientSound", 0, 1);
 
@@ -1308,14 +1269,6 @@ me.setup();
 
 function createCutInBehavior(e: FrpEngine, name: string, index: number) {
     return () => (e.rv.GetControlValue(name, index) as number) > 0.5;
-}
-
-function threeDigitDisplay(eventStream: frp.Stream<number>) {
-    return frp.compose(
-        eventStream,
-        frp.map(n => Math.round(Math.abs(n))),
-        frp.map(n => m.digits(n, 3))
-    );
 }
 
 function airBrakeServiceRange(speedMps: number, application: number) {
