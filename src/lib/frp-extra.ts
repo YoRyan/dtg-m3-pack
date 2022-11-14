@@ -30,6 +30,23 @@ export function fsm<T>(initState: T): (eventStream: frp.Stream<T>) => frp.Stream
 }
 
 /**
+ * Filters out successive values in an event stream.
+ */
+export function rejectRepeats<T>(): (eventStream: frp.Stream<T>) => frp.Stream<T> {
+    return eventStream => next => {
+        let started = false;
+        let last: T | undefined = undefined;
+        eventStream(value => {
+            if (!started || last !== value) {
+                started = true;
+                last = value;
+                next(value);
+            }
+        });
+    };
+}
+
+/**
  * Filters out undefined values from an event stream.
  */
 export function rejectUndefined<T>(): (eventStream: frp.Stream<T | undefined>) => frp.Stream<T> {

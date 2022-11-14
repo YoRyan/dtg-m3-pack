@@ -7,7 +7,7 @@ import * as cs from "lib/cabsignals";
 import * as c from "lib/constants";
 import * as frp from "lib/frp";
 import { FrpEngine } from "lib/frp-engine";
-import { fsm, mapBehavior, rejectUndefined } from "lib/frp-extra";
+import { fsm, mapBehavior, rejectRepeats, rejectUndefined } from "lib/frp-extra";
 import { PlayerUpdate, SensedDirection, VehicleCamera } from "lib/frp-vehicle";
 import * as m from "lib/math";
 import * as rw from "lib/railworks";
@@ -905,7 +905,12 @@ const me = new FrpEngine(() => {
         me.createPlayerWithoutKeyUpdateStream(),
         frp.map(_ => HeadLight.Off)
     );
-    const headlights$ = frp.compose(aiHeadlights$, frp.merge(leadHeadlights$), frp.merge(helperHeadlights$));
+    const headlights$ = frp.compose(
+        aiHeadlights$,
+        frp.merge(leadHeadlights$),
+        frp.merge(helperHeadlights$),
+        rejectRepeats()
+    );
     headlights$(setting => {
         for (const light of dimLights) {
             light.Activate(setting === HeadLight.Dim);
@@ -945,7 +950,7 @@ const me = new FrpEngine(() => {
             return !frontCoupled;
         })
     );
-    const markers$ = frp.compose(aiMarkers$, frp.merge(leadMarkers$), frp.merge(helperMarkers$));
+    const markers$ = frp.compose(aiMarkers$, frp.merge(leadMarkers$), frp.merge(helperMarkers$), rejectRepeats());
     markers$(setting => {
         for (const light of markerLights) {
             light.Activate(setting);
@@ -964,7 +969,8 @@ const me = new FrpEngine(() => {
     const hallLights$ = frp.compose(
         me.createAiUpdateStream(),
         frp.map(_ => false),
-        frp.merge(hallLightsPlayer$)
+        frp.merge(hallLightsPlayer$),
+        rejectRepeats()
     );
     hallLights$(on => {
         for (const light of hallLights) {
@@ -980,11 +986,24 @@ const me = new FrpEngine(() => {
     const doorLights$ = frp.compose(
         me.createAiUpdateStream(),
         frp.map((au): [boolean, boolean] => [au.isStopped, au.isStopped]),
-        frp.merge(doorLightsPlayer$)
+        frp.merge(doorLightsPlayer$),
+        frp.hub()
     );
-    doorLights$(([l, r]) => {
-        me.rv.ActivateNode("SL_doors_L", l);
-        me.rv.ActivateNode("SL_doors_R", r);
+    const doorLightLeft$ = frp.compose(
+        doorLights$,
+        frp.map(([l]) => l),
+        rejectRepeats()
+    );
+    const doorLightRight$ = frp.compose(
+        doorLights$,
+        frp.map(([, r]) => r),
+        rejectRepeats()
+    );
+    doorLightLeft$(on => {
+        me.rv.ActivateNode("SL_doors_L", on);
+    });
+    doorLightRight$(on => {
+        me.rv.ActivateNode("SL_doors_R", on);
     });
 
     // Cab dome light
@@ -999,7 +1018,7 @@ const me = new FrpEngine(() => {
         me.mapGetCvStream("Cablight", 0),
         frp.map(v => v > 0.5)
     );
-    const cabLightOn$ = frp.compose(noCabLight$, frp.merge(playerCabLight$));
+    const cabLightOn$ = frp.compose(noCabLight$, frp.merge(playerCabLight$), rejectRepeats());
     cabLightOn$(on => {
         cabLight.Activate(on);
     });
@@ -1019,7 +1038,11 @@ const me = new FrpEngine(() => {
         me.createPlayerWithKeyUpdateStream(),
         mapBehavior(frp.stepper(isPassView$, false))
     );
-    const interiorPassLightOn$ = frp.compose(noInteriorPassLight$, frp.merge(playerInteriorPassLight$));
+    const interiorPassLightOn$ = frp.compose(
+        noInteriorPassLight$,
+        frp.merge(playerInteriorPassLight$),
+        rejectRepeats()
+    );
     interiorPassLightOn$(on => {
         for (const light of interiorPassLights) {
             light.Activate(on);
@@ -1038,7 +1061,8 @@ const me = new FrpEngine(() => {
     const exteriorPassLightOn$ = frp.compose(
         me.createPlayerUpdateStream(),
         frp.map(_ => true),
-        frp.merge(exteriorPassLightAi$)
+        frp.merge(exteriorPassLightAi$),
+        rejectRepeats()
     );
     exteriorPassLightOn$(on => {
         for (const light of exteriorPassLights) {
@@ -1072,7 +1096,7 @@ const me = new FrpEngine(() => {
             }
         })
     );
-    const brakeLight$ = frp.compose(aiBrakeLight$, frp.merge(playerBrakeLight$));
+    const brakeLight$ = frp.compose(aiBrakeLight$, frp.merge(playerBrakeLight$), rejectRepeats());
     brakeLight$(status => {
         me.rv.ActivateNode("SL_green", status === BrakeLight.Green);
         me.rv.ActivateNode("SL_yellow", status === BrakeLight.Amber);
@@ -1163,7 +1187,8 @@ const me = new FrpEngine(() => {
             } else {
                 return 0;
             }
-        })
+        }),
+        rejectRepeats()
     );
     wiperPosition$(pos => {
         me.rv.SetTime("ext_wipers", pos);
@@ -1212,7 +1237,7 @@ const me = new FrpEngine(() => {
         frp.merge(me.createPlayerWithoutKeyUpdateStream()),
         frp.map(_ => false)
     );
-    const enableControlSounds$ = frp.compose(isSetupInsideCab$, frp.merge(isNotSetup$));
+    const enableControlSounds$ = frp.compose(isSetupInsideCab$, frp.merge(isNotSetup$), rejectRepeats());
     enableControlSounds$(on => {
         me.rv.SetControlValue("IsPlayerControl", 0, on ? 1 : 0);
     });
