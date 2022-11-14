@@ -1006,9 +1006,6 @@ const me = new FrpEngine(() => {
 
     // Passenger cabin lights for the passenger view
     let interiorPassLights = [new rw.Light("RoomLight_PassView")];
-    for (let i = 1; i <= 9; i++) {
-        interiorPassLights.push(new rw.Light(`RoomLight_0${i}`));
-    }
     const isPassView$ = frp.compose(
         me.createOnCameraStream(),
         frp.map(vc => vc === VehicleCamera.Carriage)
@@ -1025,6 +1022,26 @@ const me = new FrpEngine(() => {
     const interiorPassLightOn$ = frp.compose(noInteriorPassLight$, frp.merge(playerInteriorPassLight$));
     interiorPassLightOn$(on => {
         for (const light of interiorPassLights) {
+            light.Activate(on);
+        }
+    });
+
+    // Passenger cabin lights for the exterior view
+    const exteriorPassLights: rw.Light[] = [];
+    for (let i = 1; i <= 9; i++) {
+        exteriorPassLights.push(new rw.Light(`RoomLight_0${i}`));
+    }
+    const exteriorPassLightAi$ = frp.compose(
+        me.createAiUpdateStream(),
+        frp.map(au => au.direction !== SensedDirection.None)
+    );
+    const exteriorPassLightOn$ = frp.compose(
+        me.createPlayerUpdateStream(),
+        frp.map(_ => true),
+        frp.merge(exteriorPassLightAi$)
+    );
+    exteriorPassLightOn$(on => {
+        for (const light of exteriorPassLights) {
             light.Activate(on);
         }
     });
