@@ -1024,7 +1024,7 @@ const me = new FrpEngine(() => {
     });
 
     // Passenger cabin lights for the passenger view
-    let interiorPassLights = [new rw.Light("RoomLight_PassView")];
+    const interiorPassLight = new rw.Light("RoomLight_PassView");
     const isPassView$ = frp.compose(
         me.createOnCameraStream(),
         frp.map(vc => vc === VehicleCamera.Carriage)
@@ -1044,9 +1044,7 @@ const me = new FrpEngine(() => {
         rejectRepeats()
     );
     interiorPassLightOn$(on => {
-        for (const light of interiorPassLights) {
-            light.Activate(on);
-        }
+        interiorPassLight.Activate(on);
     });
 
     // Passenger cabin lights for the exterior view
