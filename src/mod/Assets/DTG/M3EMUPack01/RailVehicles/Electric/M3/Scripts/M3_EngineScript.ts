@@ -858,12 +858,19 @@ const me = new FrpEngine(() => {
     const speedoMphDigits$ = frp.compose(
         speedoMph$,
         frp.map(n => Math.round(Math.abs(n))),
-        frp.map(n => m.digits(n, 3))
+        frp.map(n => m.digits(n, 3)),
+        frp.map(digits => (frp.snapshot(hasPower) ? digits : undefined))
     );
-    speedoMphDigits$(([digits]) => {
-        me.rv.SetControlValue("SpeedoHundreds", 0, digits[0]);
-        me.rv.SetControlValue("SpeedoTens", 0, digits[1]);
-        me.rv.SetControlValue("SpeedoUnits", 0, digits[2]);
+    speedoMphDigits$(digits => {
+        let h, t, u: number;
+        if (digits === undefined) {
+            [h, t, u] = [0, -1, -1];
+        } else {
+            [[h, t, u]] = digits;
+        }
+        me.rv.SetControlValue("SpeedoHundreds", 0, h);
+        me.rv.SetControlValue("SpeedoTens", 0, t);
+        me.rv.SetControlValue("SpeedoUnits", 0, u);
     });
 
     // Headlight control
