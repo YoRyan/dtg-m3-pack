@@ -249,11 +249,11 @@ const me = new FrpEngine(() => {
             } else if (cv < -0.2 + 0.05) {
                 // scaled from 0 (min braking) to 1 (max service braking)
                 return [ControllerRegion.ServiceBrake, ((1 - 0) / (-0.9 + 0.2)) * (cv + 0.9) + 1];
-            } else if (cv < 0.2 - 0.05) {
+            } else if (cv < 0.12) {
                 return ControllerRegion.Coast;
             } else {
-                // scaled from 0 (min power) to 1 (max power)
-                return [ControllerRegion.Power, ((1 - 0) / (1 - 0.2)) * (cv - 1) + 1];
+                // scaled from 0 (coast) to 1 (max power)
+                return [ControllerRegion.Power, cv];
             }
         })
     );
@@ -715,7 +715,7 @@ const me = new FrpEngine(() => {
     // The commanded throttle setting depends on the position of the master
     // controller, the commanded brake setting, and the emergency brake latch.
     const throttleCommand = frp.liftN(
-        (mc, brakes, emergencyBrake) => {
+        (mc, brakes, emergencyBrake, speedMph) => {
             if (brakes !== BrakeType.None) {
                 return 0;
             } else if (emergencyBrake) {
@@ -724,12 +724,19 @@ const me = new FrpEngine(() => {
                 return 0;
             } else {
                 const [region, amount] = mc;
-                return region === ControllerRegion.Power ? ((1 - 0.25) / (1 - 0)) * (amount - 1) + 1 : 0;
+                if (region === ControllerRegion.ServiceBrake) {
+                    return 0;
+                } else if (Math.abs(speedMph) < 44) {
+                    return amount > 0.375 ? 1 : 0.4;
+                } else {
+                    return amount;
+                }
             }
         },
         masterController,
         brakeCommand,
-        emergencyBrake
+        emergencyBrake,
+        speedoMph
     );
     const throttle$ = frp.compose(me.createPlayerWithKeyUpdateStream(), mapBehavior(throttleCommand));
     // The physics value of the reverser should be one of three values.
