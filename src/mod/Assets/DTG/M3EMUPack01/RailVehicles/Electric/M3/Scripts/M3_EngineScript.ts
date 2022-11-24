@@ -90,15 +90,7 @@ enum BrakeLight {
 }
 
 type WiperUpdate = [setting: WiperMode, dt: number];
-type WiperAccum = [mode: WiperMode, cycleS: number];
-enum WiperMode {
-    Int3,
-    Int2,
-    Int1,
-    Off,
-    Low,
-    High,
-}
+type WiperMode = false | number;
 
 const me = new FrpEngine(() => {
     // Useful streams and behaviors
@@ -1114,8 +1106,7 @@ const me = new FrpEngine(() => {
         frp.map((au): WiperUpdate => {
             const [frontCoupled] = au.couplings;
             const isRaining = rw.WeatherController.GetPrecipitationDensity() > 0;
-            const setting =
-                isRaining && au.direction === SensedDirection.Forward && !frontCoupled ? WiperMode.Low : WiperMode.Off;
+            const setting = isRaining && au.direction === SensedDirection.Forward && !frontCoupled ? false : 0.5;
             return [setting, au.dt];
         })
     );
@@ -1128,71 +1119,21 @@ const me = new FrpEngine(() => {
     );
     const helperWiperUpdate$ = frp.compose(
         me.createPlayerWithoutKeyUpdateStream(),
-        frp.map((pu): WiperUpdate => [WiperMode.Off, pu.dt])
+        frp.map((pu): WiperUpdate => [false, pu.dt])
     );
     const wiperPosition$ = frp.compose(
         aiWiperUpdate$,
         frp.merge(leadWiperUpdate$),
         frp.merge(helperWiperUpdate$),
-        frp.fold<WiperAccum, WiperUpdate>(
-            ([mode, cycleS], [setting, dt]) => {
-                if (
-                    mode === setting ||
-                    (mode === WiperMode.Int3 && cycleS > 8) ||
-                    (mode === WiperMode.Int2 && cycleS > 5) ||
-                    (mode === WiperMode.Int1 && cycleS > 2) ||
-                    (mode === WiperMode.Low && cycleS > 0) ||
-                    (mode === WiperMode.High && cycleS > 0)
-                ) {
-                    const wrapS = {
-                        [WiperMode.Int3]: 8 + 2,
-                        [WiperMode.Int2]: 5 + 2,
-                        [WiperMode.Int1]: 2 + 2,
-                        [WiperMode.Off]: 0,
-                        [WiperMode.Low]: 2,
-                        [WiperMode.High]: 1.6,
-                    }[mode];
-                    const nextS = cycleS + dt;
-                    return [mode, nextS < wrapS ? nextS : 0];
-                } else {
-                    return [setting, 0];
-                }
-            },
-            [WiperMode.Off, 0]
-        ),
-        frp.map(([mode, cycleS]) => {
-            if (mode === WiperMode.Int3) {
-                if (cycleS >= 9) {
-                    return 10 - cycleS;
-                } else if (cycleS >= 8) {
-                    return cycleS - 8;
-                } else {
-                    return 0;
-                }
-            } else if (mode === WiperMode.Int2) {
-                if (cycleS >= 6) {
-                    return 7 - cycleS;
-                } else if (cycleS >= 5) {
-                    return cycleS - 5;
-                } else {
-                    return 0;
-                }
-            } else if (mode === WiperMode.Int1) {
-                if (cycleS >= 3) {
-                    return 4 - cycleS;
-                } else if (cycleS >= 2) {
-                    return cycleS - 2;
-                } else {
-                    return 0;
-                }
-            } else if (mode === WiperMode.Low) {
-                return cycleS >= 1 ? 2 - cycleS : cycleS;
-            } else if (mode === WiperMode.High) {
-                return (cycleS >= 0.8 ? 1.6 - cycleS : cycleS) * 1.25;
+        frp.fold<number, WiperUpdate>((cycle, [setting, dt]) => {
+            if (setting === false) {
+                return cycle;
             } else {
-                return 0;
+                const cycleTimeS = ((3 - 1.2) / (0 - 1)) * (setting - 1) + 1.2;
+                return (cycle + dt / cycleTimeS) % 1;
             }
-        }),
+        }, 0),
+        frp.map(cycle => -2 * Math.abs(cycle - 0.5) + 1),
         rejectRepeats()
     );
     wiperPosition$(pos => {
@@ -1211,10 +1152,10 @@ const me = new FrpEngine(() => {
         frp.map(cv => readWiperSetting(cv))
     );
     hudWiperChange$(on => {
-        me.rv.SetControlValue("Wipers", 0, on ? 0.2 : 0); // low/off
+        me.rv.SetControlValue("Wipers", 0, on ? 0.5 : 0); // medium/off
     });
     cabWiperChange$(setting => {
-        me.rv.SetControlValue("VirtualWipers", 0, setting === WiperMode.Off ? 0 : 1);
+        me.rv.SetControlValue("VirtualWipers", 0, setting === false ? 0 : 1);
     });
 
     // Ambient sounds (HVAC, etc.)
@@ -1346,17 +1287,10 @@ function readHeadlightSetting(cv: number) {
 }
 
 function readWiperSetting(cv: number) {
-    if (cv < -0.5) {
-        return WiperMode.Int3;
-    } else if (cv < -0.3) {
-        return WiperMode.Int2;
-    } else if (cv < -0.1) {
-        return WiperMode.Int1;
-    } else if (cv < 0.1) {
-        return WiperMode.Off;
-    } else if (cv < 0.3) {
-        return WiperMode.Low;
+    const floor = 0.3;
+    if (cv < floor) {
+        return false;
     } else {
-        return WiperMode.High;
+        return (cv - floor) / (1 - floor);
     }
 }
