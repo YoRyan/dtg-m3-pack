@@ -727,7 +727,7 @@ const me = new FrpEngine(() => {
                 if (region === ControllerRegion.ServiceBrake) {
                     return 0;
                 } else if (Math.abs(speedMph) < 44) {
-                    return amount > 0.375 ? 1 : 0.4;
+                    return amount > 0.375 ? 1 : 0.2;
                 } else {
                     return amount;
                 }
