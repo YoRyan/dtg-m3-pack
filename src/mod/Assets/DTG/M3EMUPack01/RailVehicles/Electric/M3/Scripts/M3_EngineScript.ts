@@ -210,10 +210,16 @@ const me = new FrpEngine(() => {
         rejectUndefined(),
         frp.hub()
     );
+    const rwMasterKeySimple$ = frp.compose(
+        me.createPlayerWithKeyUpdateStream(),
+        frp.filter(_ => !me.rv.IsExpertMode()),
+        frp.map(_ => 1)
+    );
     const rwMasterKey$ = frp.compose(
         autostartEvent$,
         frp.map(evt => (evt === ControlEvent.Autostart ? 1 : 0)),
         frp.merge(me.createGetCvAndOnCvChangeStreamFor("MasterKey", 0)),
+        frp.filter(_ => me.rv.IsExpertMode()),
         frp.map(cv => {
             switch (frp.snapshot(interlockState)) {
                 case InterlockAllows.MasterKeyIn:
@@ -227,6 +233,7 @@ const me = new FrpEngine(() => {
             }
         }),
         rejectUndefined(),
+        frp.merge(rwMasterKeySimple$),
         frp.hub()
     );
     rwMasterController$(cv => {
