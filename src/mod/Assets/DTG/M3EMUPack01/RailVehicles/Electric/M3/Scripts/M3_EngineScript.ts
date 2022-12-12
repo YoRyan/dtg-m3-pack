@@ -1113,7 +1113,7 @@ const me = new FrpEngine(() => {
         frp.map((au): WiperUpdate => {
             const [frontCoupled] = au.couplings;
             const isRaining = rw.WeatherController.GetPrecipitationDensity() > 0;
-            const setting = isRaining && au.direction === SensedDirection.Forward && !frontCoupled ? false : 0.5;
+            const setting = isRaining && au.direction === SensedDirection.Forward && !frontCoupled ? 0.5 : false;
             return [setting, au.dt];
         })
     );
